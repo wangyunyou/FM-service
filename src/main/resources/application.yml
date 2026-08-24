@@ -1,0 +1,49 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: fm-service
+
+  # Supabase PostgreSQL 连接配置
+  datasource:
+    url: jdbc:postgresql://${SUPABASE_HOST:localhost}:${SUPABASE_PORT:5432}/${SUPABASE_DB:postgres}
+    username: ${SUPABASE_USER:postgres}
+    password: ${SUPABASE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 300000
+      max-lifetime: 1200000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    default-property-inclusion: non_null
+
+# 微信小程序配置
+wx:
+  miniapp:
+    appid: ${WX_APPID:your-appid}
+    secret: ${WX_SECRET:your-secret}
+
+# JWT 配置
+jwt:
+  secret: ${JWT_SECRET:your-256-bit-secret-key-change-in-production}
+  expiration: 86400000  # 24 小时（毫秒）
+
+# 日志配置
+logging:
+  level:
+    com.wyy.fm: debug
+    org.hibernate.SQL: warn
