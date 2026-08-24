@@ -4,6 +4,8 @@ import com.wyy.fm.common.Result;
 import com.wyy.fm.config.AuthInterceptor;
 import com.wyy.fm.dto.*;
 import com.wyy.fm.service.UserService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +27,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/user")
 @RequiredArgsConstructor
+@Tag(name = "用户管理", description = "微信登录、用户信息查询和更新")
 public class UserController {
 
     /**
@@ -47,6 +50,7 @@ public class UserController {
      * - @RequestBody：从请求体 JSON 反序列化为对象
      */
     @PostMapping("/wx-login")
+    @Operation(summary = "微信登录", description = "使用微信 code 换取 JWT token，支持自动注册新用户")
     public Result<LoginResponse> wxLogin(@Valid @RequestBody WxLoginRequest request) {
         return Result.ok(userService.wxLogin(request));
     }
@@ -65,6 +69,7 @@ public class UserController {
      * 4. 调用 Service 查询用户信息
      */
     @GetMapping("/info")
+    @Operation(summary = "获取用户信息", description = "获取当前登录用户的基本信息")
     public Result<UserInfoResponse> getUserInfo(HttpServletRequest request) {
         // 从 request attribute 取出当前用户 ID（由 AuthInterceptor 设置）
         Long userId = (Long) request.getAttribute(AuthInterceptor.CURRENT_USER_ID);
@@ -80,6 +85,7 @@ public class UserController {
      * 响应：{"code":200, "message":"success", "data":null}
      */
     @PutMapping("/info")
+    @Operation(summary = "更新用户信息", description = "更新当前登录用户的昵称、头像、性别等信息")
     public Result<Void> updateUser(
             HttpServletRequest request,
             @RequestBody UpdateUserRequest updateRequest) {

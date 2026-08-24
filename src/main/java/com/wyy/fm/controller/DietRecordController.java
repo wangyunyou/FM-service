@@ -4,6 +4,9 @@ import com.wyy.fm.common.Result;
 import com.wyy.fm.config.AuthInterceptor;
 import com.wyy.fm.dto.*;
 import com.wyy.fm.service.DietRecordService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +26,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/diet")
 @RequiredArgsConstructor
+@Tag(name = "饮食记录", description = "饮食记录的增删改查和统计")
 public class DietRecordController {
 
     /**
@@ -45,6 +49,7 @@ public class DietRecordController {
      * 4. 返回创建的记录详情
      */
     @PostMapping
+    @Operation(summary = "创建饮食记录", description = "新增一条饮食记录，包含日期、餐次、食物名称和热量")
     public Result<DietRecordResponse> create(
             HttpServletRequest request,
             @Valid @RequestBody CreateDietRecordRequest createRequest) {
@@ -68,8 +73,10 @@ public class DietRecordController {
      * - 只能修改自己的记录
      */
     @PutMapping("/{id}")
+    @Operation(summary = "更新饮食记录", description = "更新指定 ID 的饮食记录，只能更新自己的记录")
     public Result<DietRecordResponse> update(
             HttpServletRequest request,
+            @Parameter(description = "饮食记录 ID", required = true)
             @PathVariable Long id,  // 从 URL 路径取记录 ID
             @RequestBody UpdateDietRecordRequest updateRequest) {
         Long userId = (Long) request.getAttribute(AuthInterceptor.CURRENT_USER_ID);
@@ -88,8 +95,10 @@ public class DietRecordController {
      * - 只能删除自己的记录
      */
     @DeleteMapping("/{id}")
+    @Operation(summary = "删除饮食记录", description = "删除指定 ID 的饮食记录，只能删除自己的记录")
     public Result<Void> delete(
             HttpServletRequest request,
+            @Parameter(description = "饮食记录 ID", required = true)
             @PathVariable Long id) {
         Long userId = (Long) request.getAttribute(AuthInterceptor.CURRENT_USER_ID);
         dietRecordService.delete(userId, id);
@@ -115,6 +124,7 @@ public class DietRecordController {
      * - records：明细列表
      */
     @GetMapping("/query")
+    @Operation(summary = "查询饮食记录", description = "按日期范围查询饮食记录，包含统计信息（总热量、日均、按餐次分组）")
     public Result<DietStatisticsResponse> query(
             HttpServletRequest request,
             @Valid QueryDietRecordRequest queryRequest) {  // URL 参数自动映射到对象
