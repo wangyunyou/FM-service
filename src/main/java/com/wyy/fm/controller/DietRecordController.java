@@ -9,15 +9,40 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * 饮食记录控制器
+ * 
+ * 接口列表：
+ * - POST /api/diet：新增饮食记录
+ * - PUT /api/diet/{id}：更新饮食记录
+ * - DELETE /api/diet/{id}：删除饮食记录
+ * - GET /api/diet/query：查询饮食记录 + 统计
+ * 
+ * 所有接口都需要 token（除了 /health）
+ */
 @RestController
 @RequestMapping("/api/diet")
 @RequiredArgsConstructor
 public class DietRecordController {
 
+    /**
+     * 饮食记录服务（依赖注入）
+     */
     private final DietRecordService dietRecordService;
 
     /**
-     * 新增饮食记录
+     * 新增饮食记录接口
+     * 
+     * 请求：POST /api/diet
+     * Header：Authorization: Bearer {token}
+     * 请求体：{"recordDate":"2026-08-24", "mealType":1, "foodName":"鸡蛋", "calories":70}
+     * 响应：{"code":200, "data":{"id":1, "recordDate":"2026-08-24", ...}}
+     * 
+     * 流程：
+     * 1. 从 token 解析 userId（AuthInterceptor 做）
+     * 2. 校验参数（@Valid 触发 DTO 里的校验规则）
+     * 3. 调用 Service 创建记录
+     * 4. 返回创建的记录详情
      */
     @PostMapping
     public Result<DietRecordResponse> create(
@@ -28,19 +53,39 @@ public class DietRecordController {
     }
 
     /**
-     * 更新饮食记录
+     * 更新饮食记录接口
+     * 
+     * 请求：PUT /api/diet/1
+     * Header：Authorization: Bearer {token}
+     * 请求体：{"foodName":"燕麦片", "calories":150}
+     * 响应：{"code":200, "data":{"id":1, "foodName":"燕麦片", ...}}
+     * 
+     * 注解说明：
+     * - @PathVariable Long id：从 URL 路径取参数（/api/diet/{id} 里的 {id}）
+     * 
+     * 权限校验：
+     * - Service 层会检查 record.userId == currentUserId
+     * - 只能修改自己的记录
      */
     @PutMapping("/{id}")
     public Result<DietRecordResponse> update(
             HttpServletRequest request,
-            @PathVariable Long id,
+            @PathVariable Long id,  // 从 URL 路径取记录 ID
             @RequestBody UpdateDietRecordRequest updateRequest) {
         Long userId = (Long) request.getAttribute(AuthInterceptor.CURRENT_USER_ID);
         return Result.ok(dietRecordService.update(userId, id, updateRequest));
     }
 
     /**
-     * 删除饮食记录
+     * 删除饮食记录接口
+     * 
+     * 请求：DELETE /api/diet/1
+     * Header：Authorization: Bearer {token}
+     * 响应：{"code":200, "message":"success", "data":null}
+     * 
+     * 权限校验：
+     * - Service 层会检查 record.userId == currentUserId
+     * - 只能删除自己的记录
      */
     @DeleteMapping("/{id}")
     public Result<Void> delete(
@@ -48,16 +93,31 @@ public class DietRecordController {
             @PathVariable Long id) {
         Long userId = (Long) request.getAttribute(AuthInterceptor.CURRENT_USER_ID);
         dietRecordService.delete(userId, id);
-        return Result.ok();
+        return Result.ok();  // 删除成功，不返回数据
     }
 
     /**
-     * 查询饮食记录 + 统计（日期范围）
+     * 查询饮食记录 + 统计接口
+     * 
+     * 请求：GET /api/diet/query?startDate=2026-08-01&endDate=2026-08-31
+     * Header：Authorization: Bearer {token}
+     * 响应：{"code":200, "data":{"totalCalories":1800, "caloriesByMeal":{...}, "records":[...]}}
+     * 
+     * 参数说明：
+     * - startDate、endDate：URL 查询参数（不是 RequestBody）
+     * - Spring 自动将 URL 参数映射到 QueryDietRecordRequest 对象
+     * 
+     * 返回数据：
+     * - totalCalories：总热量
+     * - caloriesByMeal：按餐次统计
+     * - recordCount：记录条数
+     * - avgCaloriesPerDay：日均热量
+     * - records：明细列表
      */
     @GetMapping("/query")
     public Result<DietStatisticsResponse> query(
             HttpServletRequest request,
-            @Valid QueryDietRecordRequest queryRequest) {
+            @Valid QueryDietRecordRequest queryRequest) {  // URL 参数自动映射到对象
         Long userId = (Long) request.getAttribute(AuthInterceptor.CURRENT_USER_ID);
         return Result.ok(dietRecordService.queryWithStats(userId, queryRequest));
     }
