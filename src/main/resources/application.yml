@@ -39,8 +39,19 @@ wx:
 
 # JWT 配置
 jwt:
-  secret: ${JWT_SECRET:your-256-bit-secret-key-change-in-production}
+  secret: ${JWT_SECRET}  # 必须通过环境变量提供，不使用默认值
   expiration: 86400000  # 24 小时（毫秒）
+
+# Actuator 监控配置（仅暴露必要端点，最小化信息泄露）
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+      base-path: /internal/actuator
+  endpoint:
+    health:
+      show-details: never
 
 # 日志配置
 logging:
