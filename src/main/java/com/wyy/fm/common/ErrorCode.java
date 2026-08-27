@@ -32,6 +32,10 @@ public enum ErrorCode {
     // 饮食记录相关 2000-2999
     DIET_RECORD_NOT_FOUND(2001, "饮食记录不存在"),
     DIET_DATE_INVALID(2002, "日期范围不合法"),
+    /**
+     * 查询跨度超限（接口无分页，跨度直接等于一次返回的行数上限）
+     */
+    DIET_DATE_RANGE_TOO_LONG(2003, "查询跨度不能超过 366 天"),
 
     // 第三方服务相关 3000-3999
     WX_LOGIN_FAILED(3001, "微信登录失败"),

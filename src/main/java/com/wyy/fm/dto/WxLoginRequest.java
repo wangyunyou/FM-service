@@ -19,6 +19,13 @@ import lombok.Data;
  * 
  * 示例：
  * {"code": "0b00H1ll2xxxxX...", "nickname": "张三", "avatarUrl": "https://..."}
+ *
+ * 关于初始资料（nickname / avatarUrl / gender）：
+ * - 这三项只在「本次服务端真的新建了账号」时被写入，判据是服务端的 isNewUser，
+ *   不是客户端上报的 request.isNewUser（后者仅用于对账日志）
+ * - 为什么必须这样：微信现在的 getUserProfile 只能拿到固定默认值（"微信用户" + 灰色头像），
+ *   老用户每次重登都照单全收的话，会把自己在「我的」页改过的名字刷回默认值（实测复现过）
+ * - 前端因此不需要在登录时维护资料，改昵称/性别请走 PUT /api/user/info
  */
 @Data
 public class WxLoginRequest {
@@ -57,4 +64,20 @@ public class WxLoginRequest {
     @Min(value = 0, message = "性别只能为 0/1/2")
     @Max(value = 2, message = "性别只能为 0/1/2")
     private Integer gender;
+
+    /**
+     * 客户端自报的「本次是否首次注册」标记。
+     *
+     * 重要：后端**不以它为准**。是否写入上面的 nickname / avatarUrl / gender，
+     * 只看 UserServiceImpl 里服务端自己算出的 isNewUser（本次有没有真的建号）。
+     * 原因：这个标记在客户端不可靠 —— token 被清（401/1002/退出登录）后，
+     * 老用户重新登录时前端也会判定成"首登"，于是又绕回被微信默认昵称刷掉的问题。
+     *
+     * 那为什么还留着：
+     * - 服务端会拿它跟自己算的结果对账并打日志，前端逻辑跑偏时能第一时间发现
+     * - 响应体 LoginResponse.isNewUser 才是权威值，客户端应以它为准更新本地状态
+     *
+     * 缺省 true：与老客户端（不发该字段）的行为保持一致，不影响新用户对账。
+     */
+    private Boolean isNewUser = Boolean.TRUE;
 }

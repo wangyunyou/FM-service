@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +28,18 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class DietRecordServiceImpl implements DietRecordService {
 
+    /**
+     * 单次查询允许的最大跨度（天，含首尾）
+     *
+     * 为什么必须有：GET /api/diet/query 没有分页，一次返回区间内**全部**记录，
+     * 而前端自定义区间可以把开始日期拖到 2020 年 —— 不限制跨度就等于
+     * 允许任何人用一条请求把某个账号的全部历史（以及整张表的热度）拉出来。
+     * 366 是"最多查一年"的整数上界：预设区间最长是本月（31 天）、近 7 天，
+     * 自定义场景留足余量，同时把 29000 天这种病态区间挡掉。
+     * 真要放开，得先给接口加分页并同步前端。
+     */
+    private static final long MAX_QUERY_RANGE_DAYS = 366;
+
     // 依赖注入
     private final DietRecordRepository dietRecordRepository;
 
@@ -41,14 +54,19 @@ public class DietRecordServiceImpl implements DietRecordService {
     @Override
     @Transactional
     public DietRecordResponse create(Long userId, CreateDietRecordRequest request) {
-        // 1. 创建实体对象
+        // 0. 日期合理性：只往后记流水，不允许预支未来的饭
+        //    前端 Picker 已把 end 锁在今天，但其他客户端（Swagger / test-api.html）能递任意日期，
+        //    不拦住就会写进永远对不上的脏数据（实测 2099-01-01 / 1900-01-01 曾直接 200 入库）
+        requireNotFuture(request.getRecordDate(), "记录日期");
+
+        // 1. 创建实体对象（字符串字段统一 trim，不把尾随空格写进库）
         DietRecord record = new DietRecord();
         record.setUserId(userId);
         record.setRecordDate(request.getRecordDate());
         record.setMealType(request.getMealType());
-        record.setFoodName(request.getFoodName());
+        record.setFoodName(request.getFoodName().trim());
         record.setCalories(request.getCalories());
-        record.setRemark(request.getRemark());
+        record.setRemark(trimToNull(request.getRemark()));
 
         // 2. 保存（插入）到数据库
         record = dietRecordRepository.save(record);
@@ -79,17 +97,20 @@ public class DietRecordServiceImpl implements DietRecordService {
         }
 
         // 3. 部分更新（只更新传入的字段）
+        //    字符串字段口径：null = 不改；非 null = 用 trim 后的新值覆盖；
+        //    备注比较特殊，“空串”就是合法的清空意图（前端清空备注按钮依赖这一条）
         if (request.getMealType() != null) {
             record.setMealType(request.getMealType());
         }
         if (request.getFoodName() != null) {
-            record.setFoodName(request.getFoodName());
+            record.setFoodName(request.getFoodName().trim());
         }
         if (request.getCalories() != null) {
             record.setCalories(request.getCalories());
         }
         if (request.getRemark() != null) {
-            record.setRemark(request.getRemark());
+            // 传了非 null 就是“要改”；改成空串/纯空白则归一存 NULL，库里不留“空字符串备注”
+            record.setRemark(trimToNull(request.getRemark()));
         }
 
         // 4. 保存
@@ -136,6 +157,14 @@ public class DietRecordServiceImpl implements DietRecordService {
         // 1. 校验日期范围
         if (request.getStartDate().isAfter(request.getEndDate())) {
             throw new BusinessException(ErrorCode.DIET_DATE_INVALID);
+        }
+        //    结束日期不允许在未来：前端 Picker 锁了 end，但其他客户端能递 2099-12-31，
+        //    那会把“区间天数”算成一个无意义的巨值，统计口径直接失真
+        requireNotFuture(request.getEndDate(), "结束日期");
+        //    跨度上限：接口无分页，跨度就是一次的返回量（见 MAX_QUERY_RANGE_DAYS 注释）
+        long span = request.getEndDate().toEpochDay() - request.getStartDate().toEpochDay() + 1;
+        if (span > MAX_QUERY_RANGE_DAYS) {
+            throw new BusinessException(ErrorCode.DIET_DATE_RANGE_TOO_LONG);
         }
 
         // 2. 查询明细列表
@@ -203,5 +232,30 @@ public class DietRecordServiceImpl implements DietRecordService {
                 .remark(record.getRemark())
                 .createdAt(record.getCreatedAt())
                 .build();
+    }
+
+    /**
+     * 拒绝「今天之后」的日期
+     *
+     * 为什么用 LocalDate.now() 而不是 UTC：本项目的日期全程是“本地自然日”口径
+     * （前端 date.ts 也一律按本地零点构造），两边保持一致才能避免跨零点差一天。
+     */
+    private void requireNotFuture(LocalDate date, String label) {
+        if (date != null && date.isAfter(LocalDate.now())) {
+            throw new BusinessException(ErrorCode.DIET_DATE_INVALID, label + "不能晚于今天");
+        }
+    }
+
+    /**
+     * 可选字符串字段：trim 后为空则归一为 null
+     * - 创建：不传 / 空串都是「无备注」，统一存 NULL
+     * - 更新：null 代表「不改」（在上面分支已拦），能走到这里的空串就是「清空」意图
+     */
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

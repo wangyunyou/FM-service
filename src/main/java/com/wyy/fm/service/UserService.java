@@ -49,6 +49,20 @@ public interface UserService {
     void updateUser(Long userId, UpdateUserRequest request);
 
     /**
+     * 取用户并校验账号可用（不存在 / 被禁用都会抛业务异常）
+     *
+     * 为什么需要它：
+     * - users.status 早就有值，但后端从来没读过它，“禁用账号”等于不存在
+     *   （ErrorCode.USER_DISABLED 以反前端重登码集都是死代码）
+     * - JWT 无状态，签发后只能靠服务端每次读时校验才能拉回已登录的禁用账号
+     *
+     * @param userId 用户 ID
+     * @return User 实体（状态正常）
+     * @throws com.wyy.fm.common.BusinessException 用户不存在（1001）或已被禁用（1002）
+     */
+    User getActiveUserById(Long userId);
+
+    /**
      * 根据 ID 查询用户（内部用）
      * 
      * @param userId 用户 ID

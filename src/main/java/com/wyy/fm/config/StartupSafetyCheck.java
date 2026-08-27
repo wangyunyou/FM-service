@@ -24,6 +24,7 @@ import java.util.stream.Collectors;
  * 校验范围（只覆盖"开发便利"与"密钥强度"类配置，不替代各配置类自身的行为）：
  * - wx.miniapp.mock-enabled：开启后任意 code 都能换 token
  * - app.cors.allowed-origin-patterns：通配符（含 `*`）与 "null" 只允许在开发环境用
+ * - springdoc.*.enabled：接口文档等于把全量接口清单公开，只允许开发环境打开
  * - jwt.secret：为空、仍是文档示例值或 UTF-8 长度不足 32 字节（弱密钥可被离线爆破）
  *
  * 依赖关系：
@@ -85,6 +86,18 @@ public class StartupSafetyCheck {
     private String jwtSecret;
 
     /**
+     * 接口文档开关
+     * - api-docs 与 swagger-ui 在配置里共用同一个环境变量 SWAGGER_ENABLED，
+     *   因此只取 api-docs 这一个作为代表判断
+     *
+     * 为什么也要拦：AGENTS.md 把它列为「只能开在开发环境的开关」，但此前只靠默认值 false
+     * 保平安；一旦有人为了线上临时排查设了 SWAGGER_ENABLED=true 又忘了关，
+     * 生产就会长期对外描述完整接口面（路径、参数、鉴权约定）。
+     */
+    @Value("${springdoc.api-docs.enabled:false}")
+    private boolean apiDocsEnabled;
+
+    /**
      * 启动后立即校验，不通过则抛异常阻止容器起来
      *
      * @throws IllegalStateException 非 dev profile 下开启了开发便利配置或密钥不合格
@@ -92,8 +105,17 @@ public class StartupSafetyCheck {
     @PostConstruct
     void verifyProductionSafety() {
         if (isDevProfile()) {
-            log.info("开发环境自检跳过：mock 登录={}，跨域来源={}", mockLoginEnabled, normalize(corsAllowedOriginPatterns));
+            log.info("开发环境自检跳过：mock 登录={}，接口文档={}，跨域来源={}",
+                    mockLoginEnabled, apiDocsEnabled, normalize(corsAllowedOriginPatterns));
             return;
+        }
+
+        if (apiDocsEnabled) {
+            throw new IllegalStateException(
+                    "生产环境禁止开启接口文档（springdoc.api-docs.enabled / springdoc.swagger-ui.enabled，"
+                            + "即环境变量 SWAGGER_ENABLED=true）：它会把全量接口清单（路径、参数、鉴权方式）公开暴露。"
+                            + "线上排查请用完立即去掉该变量；本地看文档用 -Dspring-boot.run.profiles=dev 启动后访问 "
+                            + "http://localhost:8080/swagger-ui.html");
         }
 
         if (mockLoginEnabled) {

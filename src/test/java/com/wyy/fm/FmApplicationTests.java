@@ -17,6 +17,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -362,6 +363,283 @@ class FmApplicationTests {
                         .content("{\"calories\": 1}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(1003));  // NO_PERMISSION
+    }
+
+    // ==================== 2026-08-28 代码审查后补的回归测试 ====================
+    // 下面每一组都对应一条实测复现过的问题，改坏了会立刻红。
+
+    /**
+     * 回归：禁用账号（status=1）既不能登录，也不能继续读个人数据
+     *
+     * 背景：users.status 一直有值、ErrorCode.USER_DISABLED 与前端重登码集也都定义了，
+     *      但后端从没读过这个字段 —— 实测把 status 改成 1 后，
+     *      带旧 token 查询返回 200、再登录还能拿到新 token，"禁用"完全无效。
+     */
+    @Test
+    void disabledUserCannotLoginNorReadProfile() throws Exception {
+        // 用 mock 登录建账号（dev profile 下任意 code 可换 token），
+        // 这样后面的“重新登录”走的确实是同一个 openid，而不是又新建一个用户
+        String token = loginByCode("case-disabled");
+
+        // 禁用前先确认可用
+        mockMvc.perform(get("/api/user/info").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        userRepository.findById(userId).ifPresent(u -> {
+            u.setStatus(1);
+            userRepository.saveAndFlush(u);
+        });
+
+        // 旧 token 继续用 → 1002（前端 request 层据此清 token 跳登录页）
+        mockMvc.perform(get("/api/user/info").header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(1002));
+
+        // 重新登录 → 同样 1002，不再发新 token
+        mockMvc.perform(post("/api/user/wx-login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"case-disabled\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(1002));
+    }
+
+    /**
+     * 回归：老用户重新登录不得被刷掉自己改过的昵称/性别
+     *
+     * 背景：微信现在的 getUserProfile 只能拿到固定默认值（"微信用户" + 灰头像），
+     *      而 wxLogin 原来只判 null 就覆盖 —— 实测用户自己改名后再登录一次，
+     *      昵称被打回"微信用户"、性别被打回 0。
+     * 口径：初始资料只写入「服务端本次真的新建了账号」的用户；
+     *      客户端上报的 isNewUser 只用于对账，不参与决策（token 被清后老用户重登也会自报首登）。
+     */
+    @Test
+    void returningUserProfileIsNotOverwritten() throws Exception {
+        // 首登：服务端建号，昵称按前端带上来的初始值写入
+        mockMvc.perform(post("/api/user/wx-login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"case-no-overwrite\",\"nickname\":\"微信用户\",\"gender\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.nickname").value("微信用户"))
+                .andExpect(jsonPath("$.data.isNewUser").value(true));
+        String token = loginByCode("case-no-overwrite");
+
+        // 用户自己在「我的」页改过资料
+        mockMvc.perform(put("/api/user/info")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"nickname\":\"我自己起的名字\",\"gender\":2}"))
+                .andExpect(status().isOk());
+
+        // 老用户重登：前端仍会把微信默认昵称带上来（无论它自报 isNewUser 是 true 还是 false），
+        // 服务端都必须因为"账号已存在"而忽略这三项
+        mockMvc.perform(post("/api/user/wx-login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"case-no-overwrite\",\"nickname\":\"微信用户\",\"gender\":0,\"isNewUser\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.isNewUser").value(false))
+                .andExpect(jsonPath("$.data.nickname").value("我自己起的名字"));
+
+        mockMvc.perform(get("/api/user/info").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.nickname").value("我自己起的名字"))
+                .andExpect(jsonPath("$.data.gender").value(2));
+
+        // 自报 false 也一样（走的是同一条服务端判据）
+        mockMvc.perform(post("/api/user/wx-login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"case-no-overwrite\",\"nickname\":\"又被刷\",\"isNewUser\":false}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/user/info").header("Authorization", "Bearer " + token))
+                .andExpect(jsonPath("$.data.nickname").value("我自己起的名字"));
+    }
+
+    /**
+     * 回归：remark 传空串必须能清空备注（省略键与传 null 都代表"不改"）
+     *
+     * 背景：前端 JSON.stringify 会丢掉值为 undefined 的键，
+     *      而库里已有的备注既清不掉、也发不出"清空"意图 —— 实测三种发法都改不动原值。
+     */
+    @Test
+    void emptyRemarkClearsItButOmittedKeepsIt() throws Exception {
+        User user = newTestUser("test-openid-remark");
+        String token = jwtUtil.generateToken(user.getId());
+        Long recordId = newTestRecord(user.getId(), 1, "鸡蛋", 70).getId();
+
+        // 先写上一条备注
+        mockMvc.perform(put("/api/diet/" + recordId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"remark\":\"加了糖\"}"))
+                .andExpect(jsonPath("$.data.remark").value("加了糖"));
+
+        // 省略 remark 键（前端"没清空"时的实际发法）→ 保持原值
+        mockMvc.perform(put("/api/diet/" + recordId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"calories\":80}"))
+                .andExpect(jsonPath("$.data.remark").value("加了糖"));
+
+        // 显式 null → 仍是"不改"
+        mockMvc.perform(put("/api/diet/" + recordId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"remark\":null}"))
+                .andExpect(jsonPath("$.data.remark").value("加了糖"));
+
+        // 空串 → 清空（响应里 default-property-inclusion=non_null，字段会直接消失）
+        mockMvc.perform(put("/api/diet/" + recordId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"remark\":\"\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.remark").doesNotExist());
+    }
+
+    /**
+     * 回归：字符串"必填"字段不得被纯空白糊过去
+     *
+     * 背景：foodName 原来写的是 @Size(min=1)，实测 {"foodName":"   "} 直接 200 入库，
+     *      列表里出现一条"看不见的名字"。现已统一为 @NotBlank + 写入前 trim。
+     */
+    @Test
+    void blankStringsAreRejected() throws Exception {
+        User user = newTestUser("test-openid-blank");
+        String token = jwtUtil.generateToken(user.getId());
+        Long recordId = newTestRecord(user.getId(), 1, "牛奶", 100).getId();
+
+        mockMvc.perform(put("/api/diet/" + recordId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"foodName\":\"   \"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400));
+
+        mockMvc.perform(put("/api/user/info")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"nickname\":\"   \"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("昵称不能为空"));
+    }
+
+    /**
+     * 回归：热量上限与日期不得在未来（前端挡了，后端也必须挡）
+     *
+     * 背景：CALORIES_MAX 与"日期不能是未来"只写在小程序里，
+     *      实测用 curl 能记 2099-01-01、1900-01-01，以及 200000 kcal 的记录并返回 200。
+     */
+    @Test
+    void caloriesUpperBoundAndFutureDateAreRejected() throws Exception {
+        User user = newTestUser("test-openid-bounds");
+        String token = jwtUtil.generateToken(user.getId());
+
+        mockMvc.perform(post("/api/diet")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"recordDate\":\"" + LocalDate.now() + "\",\"mealType\":1,\"foodName\":\"巨餐\",\"calories\":100001}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400));
+
+        mockMvc.perform(post("/api/diet")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"recordDate\":\"2099-01-01\",\"mealType\":1,\"foodName\":\"未来的饭\",\"calories\":1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(2002))
+                .andExpect(jsonPath("$.message").value("记录日期不能晚于今天"));
+
+        mockMvc.perform(get("/api/diet/query")
+                        .header("Authorization", "Bearer " + token)
+                        .param("startDate", "2020-01-01")
+                        .param("endDate", "2099-12-31"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(2002))
+                .andExpect(jsonPath("$.message").value("结束日期不能晚于今天"));
+    }
+
+    /**
+     * 回归：查询跨度必须有上限（接口无分页，跨度 = 一次返回的行数）
+     *
+     * 背景：GET /api/diet/query 一次吐区间内全部记录，而自定义区间的开始日期
+     *      原本可以拖到 2020 年 —— 不限制跨度就等于允许一条请求拉出某账号全部历史。
+     *      现已限制 366 天（2003），前端 Picker 也按结束日期倒推同样的下界。
+     */
+    @Test
+    void queryRangeSpanIsCapped() throws Exception {
+        User user = newTestUser("test-openid-span");
+        String token = jwtUtil.generateToken(user.getId());
+        LocalDate today = LocalDate.now();
+
+        // 366 天：边界内，放行
+        mockMvc.perform(get("/api/diet/query")
+                        .header("Authorization", "Bearer " + token)
+                        .param("startDate", today.minusDays(365).toString())
+                        .param("endDate", today.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        // 367 天：越界，2003
+        mockMvc.perform(get("/api/diet/query")
+                        .header("Authorization", "Bearer " + token)
+                        .param("startDate", today.minusDays(366).toString())
+                        .param("endDate", today.toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(2003));
+    }
+
+    /**
+     * 回归：路径参数不是数字要返回 400 + 可读文案，而不是 500「服务器内部错误」
+     *
+     * 背景：MethodArgumentTypeMismatchException 此前没被接住，实测 PUT /api/diet/abc 返回 500；
+     *      而日期参数转换失败虽然进了 BindException 分支，
+     *      却把 "Failed to convert property value of type 'java.lang.String' ..." 整段甩给用户
+     *      （前端 request 层会原样 toast）。
+     */
+    @Test
+    void typeMismatchReturnsReadableBadRequest() throws Exception {
+        User user = newTestUser("test-openid-typemismatch");
+        String token = jwtUtil.generateToken(user.getId());
+
+        mockMvc.perform(put("/api/diet/abc")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"calories\":1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                // 文案必须是「字段中文名 + 格式不正确」：以前这里是 500「服务器内部错误」
+                .andExpect(jsonPath("$.message").value("记录 ID格式不正确"));
+
+        // 必须显式按 UTF-8 取响应体：getContentAsString() 不传参时按 ISO-8859-1 解码，
+        // 中文提示会读成乱码，导致"包含中文"的断言假失败
+        String message = mockMvc.perform(get("/api/diet/query")
+                        .header("Authorization", "Bearer " + token)
+                        .param("startDate", "2026-02-30")
+                        .param("endDate", LocalDate.now().toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertFalse(message.contains("java.lang.String"), "不得把 Spring 内部类型文案透给用户");
+        assertFalse(message.contains("jakarta.validation"), "不得把注解全限定名透给用户");
+        assertTrue(message.contains("开始日期"), "应给出中文字段名提示");
+    }
+
+    /**
+     * 走 mock 登录拿 token（dev profile 下 wx.miniapp.mock-enabled=true，任意 code 可换）
+     *
+     * 为什么需要它：mock 的 openid 是 code 的 SHA-256 前 32 位，Java 侧算不出来，
+     * 手工 new 一个 User 再登录就变成两个不同账号 —— 涉及登录行为的回归只能用这个方法建号。
+     */
+    private String loginByCode(String code) throws Exception {
+        String body = mockMvc.perform(post("/api/user/wx-login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"" + code + "\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        String token = body.replaceAll(".*\"token\":\"", "").replaceAll("\".*", "");
+        assertFalse(token.isEmpty(), "mock 登录必须返回 token");
+        return token;
     }
 
     /**

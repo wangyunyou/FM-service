@@ -53,4 +53,15 @@ public class UserInfoResponse {
      * - 2：女
      */
     private Integer gender;
+
+    /**
+     * 账号状态
+     * - 0：正常
+     * - 1：禁用
+     *
+     * 为什么能读到：本接口已经拦住了 status=1 的账号（返回 1002），
+     * 能走到这里的必然是 0；保留该字段是为了给前端做“非正常就不弹详情”的兼容判定，
+     * 以后如果开放自助申诉/封禁提示不需要再改接口。
+     */
+    private Integer status;
 }

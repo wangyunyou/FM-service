@@ -59,14 +59,21 @@ public class CreateDietRecordRequest {
     /**
      * 热量（千卡）
      * - @Min(0)：不能为负数
+     * - @Max：挡掉误输入的六位数量级，上限与前端 CALORIES_MAX 同值
+     *
+     * 关于小数（已知限制）：字段是 Integer，Jackson 会把 12.5 静默截断成 12 并返回 200，
+     * 不报错。前端 record-edit 页靠 Number.isInteger 自己卡住，
+     * 用其他客户端（Swagger / test-api.html）直接调用时请自行保证传整数。
      */
     @NotNull(message = "热量不能为空")
     @Min(value = 0, message = "热量不能为负数")
+    @Max(value = 100000, message = "热量看起来过大（上限 100000）")
     private Integer calories;
 
     /**
      * 备注（可选）
      * - 长度上限对齐 diet_records.remark（VARCHAR(500)）
+     * - 创建接口无“保持原值”语义，因此空串与不传一样都是「无备注」
      */
     @Size(max = 500, message = "备注最长 500 个字符")
     private String remark;
