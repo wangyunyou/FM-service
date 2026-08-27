@@ -34,8 +34,13 @@ spring:
       mode: never
 
   jackson:
+    # 注意：date-format 只作用于 java.util.Date / Calendar。
+    # 本项目的 LocalDate / LocalDateTime 走 JSR-310 序列化器，永远输出 ISO 格式
+    # （如 2026-08-28、2026-08-28T01:07:46），改下面这行不会改变它们的形状。
+    # 前端 types/api.ts 就是按 ISO 对接的，要改格式得两边一起改。
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
+    # 失败响应里 data 为 null 时不输出该字段，减少无效载荷
     default-property-inclusion: non_null
 
 # 微信小程序配置

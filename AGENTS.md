@@ -107,10 +107,15 @@ throw new IllegalArgumentException("参数错误");
 - 新增公开接口时，必须在 `WebMvcConfig.addInterceptors()` 中添加 `excludePathPatterns`
 - 拦截范围只有 `/api/**`；`/health`、`/version` 本就在范围外，不需要（也不应该）再写 exclude
 - 跨域来源走配置：`app.cors.allowed-origin-patterns`（环境变量 `CORS_ALLOWED_ORIGIN_PATTERNS`），**禁止写 `*` 又开 credentials**
-- 两个只能开在开发环境的开关：`wx.miniapp.mock-enabled`（mock 登录）、`springdoc.*.enabled`（接口文档）；
-  跨域来源里的通配符与 `null` 也属开发专用。mock、越界来源、以及不合格 JWT 密钥（空/示例值/UTF-8 长度<32 字节）
+- 三个只能开在开发环境的开关：`wx.miniapp.mock-enabled`（mock 登录）、`springdoc.*.enabled`（接口文档）；
+  跨域来源里的通配符与 `null` 也属开发专用。mock、接口文档、越界来源、以及不合格 JWT 密钥（空/示例值/UTF-8 长度<32 字节）
   由 `StartupSafetyCheck` 在非 dev profile 启动时直接抛异常拦住，**新增同类开发便利开关时要同步往该自检里加一条**
+  （历史上文档写了 swagger 但自检没查，属于文档与代码不一致，已补）
 - 获取当前用户 ID：`request.getAttribute(AuthInterceptor.CURRENT_USER_ID)`
+- **禁用账号必须读时校验**：JWT 无状态，签发后拦不住，所以 `UserService.getActiveUserById()` 会检查
+  `users.status`，非 0 直接抛 `USER_DISABLED(1002)`；`getUserInfo` / `updateUser` / `wxLogin` 都走它。
+  只用 `getById()` 等于把封禁形同虚设（历史上就漏过：status 有值、错误码有定义、前端也列了重登码，
+  但后端从没读过该字段）。给新的读接口加鉴权时，选 `getActiveUserById` 而不是 `getById`。
 
 ### 4. 实体与数据库
 
@@ -118,6 +123,8 @@ throw new IllegalArgumentException("参数错误");
 - 使用 `@Data` + `@EqualsAndHashCode(callSuper = true)`
 - 表名用 `@Table(name = "xxx")`，字段名用 `@Column(name = "xxx")`
 - 关联关系用 `userId` 字段（逻辑外键），不用 `@ManyToOne`
+  - 逻辑外键 = **没有数据库级联删除**：删用户不会带走 `diet_records`，需要业务层自己处理。
+    目前没有删用户接口所以踩不到，真要加记得先删子记录（否则留下无主记录）
 - 生产环境 `ddl-auto: validate`（不会自动建表），开发环境 `ddl-auto: update`
 - 种子数据写 `src/main/resources/data.sql`，必须写成幂等（`WHERE NOT EXISTS`），用业务唯一键定位而不是硬编码自增 ID；只在 dev profile 执行（`spring.sql.init.mode`）
 
@@ -135,16 +142,41 @@ throw new IllegalArgumentException("参数错误");
 - 不包含业务逻辑
 - **每个写请求入参都要加 `@Valid`**（包括 `@RequestBody` 和 GET 查询参数对象）；DTO 上写了 `@NotNull`/`@Min`/`@Size` 却没在 Controller 加 `@Valid`，校验一行都不会生效
 - GET 查询参数绑定失败抛 `BindException`（不是 `MethodArgumentNotValidException`），两者都要在 `GlobalExceptionHandler` 里接住，否则 400 会变成 500
+- 路径/查询参数**类型转换失败**抛 `MethodArgumentTypeMismatchException`，同样必须单独接住：
+  不接就会落到兜底 `Exception` 分支（实测 `PUT /api/diet/abc` 返回过 500）；
+  而且它的默认 message 带 `@jakarta.validation.constraints.NotNull java.time.LocalDate` 这类内部文案，
+  会被前端逐字 toast 给用户，必须转成「开始日期格式不正确」这种可读提示
 
 ### 7. DTO 规范
 
 - 请求 DTO 命名：`CreateXxxRequest` / `UpdateXxxRequest` / `QueryXxxRequest`
 - 响应 DTO 命名：`XxxResponse`
 - 校验注解：`@NotNull`、`@NotBlank`、`@Size` 等（Jakarta Validation）
+- 字符串“必填”分两种写法，**不能混**：
+  - 必填字段（`CreateXxxRequest`）用 `@NotBlank`
+  - 可选字段（`UpdateXxxRequest`，null = 不改）用本项目的 `@NotBlankIfPresent`
+    （`com.wyy.fm.common`）。这里绝不能用 `@NotBlank`：它把 null 也判失败，
+    会把"只改热量"这类合法部分更新一起挡掉（实测 message 变成"食物名称不能为空; 热量不能为负数"）。
+    `@Size(min=1)` 也不行：挡不住纯空白（实测 `{"foodName":"   "}` 能 200 入库）
+- 数值上限必须前后端同值：`calories` 的 `@Max(100000)` 与前端 `constants/validation.ts` 的
+  `CALORIES_MAX` 是一对；只写在前端等于没有（Swagger / test-api.html 能绕过）
 - 字符串长度上限必须对齐实体列定义（如 `foodName` 对齐 `VARCHAR(200)`），不先拦住会在写库时变 500
+- Service 写入前统一 `trim()`；可选字符串 trim 后为空则存 NULL，库里不留带首尾空格的值
 - 使用 Lombok `@Data` / `@Builder`
 
-### 8. RESTful 路径
+### 8. 部分更新与“置空”口径（`UpdateXxxRequest`）
+
+| 请求里怎么发 | 含义 |
+|---|---|
+| 不带该键 / `null` | 不改该字段 |
+| `remark` 传空串 `""` | 清空备注（库里归一存 NULL） |
+| 带 `@NotBlank` 的字段传空串/纯空白 | 400 参数错误（`nickname` / `avatarUrl` / `foodName` 不允许刷成空） |
+
+为什么必须把空串当“清空”而不是“不改”：前端 `JSON.stringify` 会直接丢弃值为 `undefined` 的键，
+所以“清空”这个意图只能用一个非 null 的特殊值承载。实测：省略键与传 `null` 都改不动原值，
+只有 `""` 能清掉——不写进契约的话，前端就会把 `field: undefined` 发出来并默默丢失数据。
+
+### 9. RESTful 路径
 
 | 操作 | 方法 | 路径示例 |
 |---|---|---|

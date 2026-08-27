@@ -126,6 +126,19 @@ mvn spring-boot:run
 
 > `/health`、`/version` 不在 `/api/**` 下，因此不经过 JWT 拦截器。新增公开接口请放在 `/api/**` 内并在 `WebMvcConfig` 里显式 exclude，避免漏配鉴权。
 
+### 几个容易踩的接口口径
+
+| 口径 | 行为 |
+|------|------|
+| 部分更新的“置空” | `PUT /api/diet/{id}` 与 `PUT /api/user/info`：**不传 / 传 null = 不改该字段**；`remark` 传空串 `""` = 清空备注（库里存 NULL）；`nickname`/`avatarUrl` 传空串是参数错误（不允许刷成空） |
+| `PUT /api/diet/{id}` 没有 `recordDate` | 记录日期建完不可改，需要换日期只能删除重建（前端编辑页据此锁住日期字段） |
+| `GET /api/diet/query` 的 `caloriesByMeal` | key 是**餐次中文名**，且只包含区间内出现过的餐次，消费方取值需自行兜底 0 |
+| `calories` 不接受小数以外的宽容 | 字段是 `Integer`，Jackson 会把 `12.5` **静默截断成 12 并返回 200**；上限 `@Max(100000)`，超出返 400 |
+| 日期不允许在未来 | `recordDate` 与查询的 `endDate` 晚于今天返 2002（前端 Picker 也锁了 `end=今天`） |
+| 查询跨度上限 366 天 | `GET /api/diet/query` **没有分页**，一次返回区间内全部记录，所以跨度就是单次返回量；超出返 **2003**。要放开必须先加分页并同步前端 |
+| `POST /api/user/wx-login` 的初始资料 | `nickname`/`avatarUrl`/`gender` **只在服务端本次真的新建账号时**写入；老用户重登一律忽略（微信现在只能给出固定默认昵称"微信用户"，照收会刷掉用户自己改的名字）。请求体里的 `isNewUser` 只是客户端自报标记，**服务端不采信**，仅用于对账日志；权威值以响应体的 `isNewUser` 为准 |
+| `users.status = 1`（禁用） | 登录与读写个人数据均返回 **1002**，前端会清 token 退回登录页（JWT 无状态，存量 token 靠读接口拦住） |
+
 ### 认证方式
 
 需要认证的接口，在请求头中添加：
@@ -306,7 +319,9 @@ CREATE TABLE users (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_openid ON users(openid);
+-- openid 上的 UNIQUE 已经建了唯一索引（实体里 @Index(unique=true) 与之对应），
+-- 不要再补 CREATE INDEX idx_openid，那会留下一个同列、非唯一的重复索引。
+-- 手机号是查询条件，保留普通索引。
 CREATE INDEX idx_phone ON users(phone);
 
 -- 饮食记录表
