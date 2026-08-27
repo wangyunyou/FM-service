@@ -83,12 +83,16 @@ public class UserController {
      * Header：Authorization: Bearer {token}
      * 请求体：{"nickname": "李四", "gender": 2}
      * 响应：{"code":200, "message":"success", "data":null}
+     *
+     * 校验：
+     * - @Valid 触发 UpdateUserRequest 上的长度/范围规则
+     * - 字段均为可选（部分更新），传了才校验
      */
     @PutMapping("/info")
     @Operation(summary = "更新用户信息", description = "更新当前登录用户的昵称、头像、性别等信息")
     public Result<Void> updateUser(
             HttpServletRequest request,
-            @RequestBody UpdateUserRequest updateRequest) {
+            @Valid @RequestBody UpdateUserRequest updateRequest) {  // 不写 @Valid 则 DTO 校验不会执行
         Long userId = (Long) request.getAttribute(AuthInterceptor.CURRENT_USER_ID);
         userService.updateUser(userId, updateRequest);
         return Result.ok();  // 更新成功，不返回数据

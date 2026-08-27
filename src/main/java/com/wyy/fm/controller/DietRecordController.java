@@ -71,6 +71,10 @@ public class DietRecordController {
      * 权限校验：
      * - Service 层会检查 record.userId == currentUserId
      * - 只能修改自己的记录
+     *
+     * 部分更新语义：
+     * - DTO 字段全部可选（无 @NotNull），null 表示"不改这个字段"
+     * - 非 null 的值才参与校验和赋值，所以 @Min/@Max 只在字段被传时生效
      */
     @PutMapping("/{id}")
     @Operation(summary = "更新饮食记录", description = "更新指定 ID 的饮食记录，只能更新自己的记录")
@@ -78,7 +82,7 @@ public class DietRecordController {
             HttpServletRequest request,
             @Parameter(description = "饮食记录 ID", required = true)
             @PathVariable Long id,  // 从 URL 路径取记录 ID
-            @RequestBody UpdateDietRecordRequest updateRequest) {
+            @Valid @RequestBody UpdateDietRecordRequest updateRequest) {  // @Valid 必须写：不写则 DTO 上的 @Min/@Max 全部失效
         Long userId = (Long) request.getAttribute(AuthInterceptor.CURRENT_USER_ID);
         return Result.ok(dietRecordService.update(userId, id, updateRequest));
     }

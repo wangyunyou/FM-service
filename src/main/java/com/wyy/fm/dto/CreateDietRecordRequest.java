@@ -4,6 +4,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 /**
@@ -48,8 +49,11 @@ public class CreateDietRecordRequest {
     /**
      * 食物名称
      * - @NotBlank：不能为空或空字符串
+     * - @Size(200)：对齐 diet_records.food_name（VARCHAR(200)），
+     *   不先拦会在写库时被数据库截断报错，变成 500
      */
     @NotBlank(message = "食物名称不能为空")
+    @Size(max = 200, message = "食物名称最长 200 个字符")
     private String foodName;
 
     /**
@@ -62,7 +66,8 @@ public class CreateDietRecordRequest {
 
     /**
      * 备注（可选）
-     * - 没有校验注解，可以为 null
+     * - 长度上限对齐 diet_records.remark（VARCHAR(500)）
      */
+    @Size(max = 500, message = "备注最长 500 个字符")
     private String remark;
 }

@@ -2,6 +2,7 @@ package com.wyy.fm.dto;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 /**
@@ -32,7 +33,10 @@ public class UpdateDietRecordRequest {
 
     /**
      * 食物名称（可选）
+     * - @Size(min=1)：传了就不能是空串（想置空请传 null，表示不改）
+     * - 长度上限对齐 diet_records.food_name（VARCHAR(200)）
      */
+    @Size(min = 1, max = 200, message = "食物名称长度 1-200 个字符")
     private String foodName;
 
     /**
@@ -43,6 +47,8 @@ public class UpdateDietRecordRequest {
 
     /**
      * 备注（可选）
+     * - 长度上限对齐 diet_records.remark（VARCHAR(500)）
      */
+    @Size(max = 500, message = "备注最长 500 个字符")
     private String remark;
 }

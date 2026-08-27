@@ -1,7 +1,6 @@
 package com.wyy.fm;
 
 import com.wyy.fm.common.JwtUtil;
-import com.wyy.fm.dto.CreateDietRecordRequest;
 import com.wyy.fm.dto.DietStatisticsResponse;
 import com.wyy.fm.dto.QueryDietRecordRequest;
 import com.wyy.fm.model.DietRecord;
@@ -30,13 +29,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 注解说明：
  * - @SpringBootTest：启动完整的 Spring 容器（真实环境）
  * - @AutoConfigureMockMvc：自动配置 MockMvc（模拟 HTTP 请求）
- * - @ActiveProfiles("dev")：使用 dev 环境配置（H2 内存数据库）
- * - @Transactional：每个测试方法执行完自动回滚，不影响数据库
- * 
+ * - @ActiveProfiles("dev")：使用 dev 配置，即本地 PostgreSQL（jdbc:postgresql://localhost:5432/fmdb）
+ *   注意：跑测试前必须先启动本地 PG；data.sql 会先写入种子数据（测试用户 + 当天三餐）
+ * - @Transactional：每个测试方法执行完自动回滚，测试自己造的数据不会落库
+ *   （data.sql 的插入在容器启动时已提交，不受回滚影响）
+ *
  * 测试内容：
  * - JWT 工具类测试
- * - 饮食记录查询测试
- * - HTTP 接口测试
+ * - 饮食记录统计测试（用独立用户，不依赖种子数据）
+ * - HTTP 接口测试（含鉴权与参数校验回归）
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -88,10 +89,13 @@ class FmApplicationTests {
 
     /**
      * 测试空数据查询
+     *
+     * 为什么现造一个用户而不是写死 userId：
+     * - dev 库里有 data.sql 的种子数据，硬编码 ID 可能撞上真实记录导致断言飘
      */
     @Test
     void testDietRecordQueriesWhenEmpty() {
-        Long userId = 999L;  // 不存在的用户
+        Long userId = newTestUser("test-openid-empty").getId();
         LocalDate start = LocalDate.now().minusDays(7);
         LocalDate end = LocalDate.now();
 
@@ -113,10 +117,12 @@ class FmApplicationTests {
 
     /**
      * 测试有数据时的查询
+     *
+     * 用独立用户隔离数据，避免与 data.sql 种子记录求和互干扰
      */
     @Test
     void testDietRecordQueriesWithData() {
-        Long userId = 1L;
+        Long userId = newTestUser("test-openid-stats").getId();
         LocalDate today = LocalDate.now();
 
         // 1. 插入两条测试数据
@@ -190,11 +196,7 @@ class FmApplicationTests {
     @Test
     void testAuthorizedApiFlow() throws Exception {
         // 1. 创建测试用户
-        User user = new User();
-        user.setOpenid("test-openid-mock");
-        user.setNickname("测试用户");
-        user.setStatus(0);
-        user = userRepository.save(user);
+        User user = newTestUser("test-openid-mock");
 
         // 2. 生成 token
         String token = jwtUtil.generateToken(user.getId());
@@ -234,5 +236,120 @@ class FmApplicationTests {
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.totalCalories").value(350))
                 .andExpect(jsonPath("$.data.recordCount").value(1));
+    }
+
+    /**
+     * 回归：PUT /api/diet/{id} 必须触发 DTO 参数校验
+     *
+     * 背景：Controller 入参漏写 @Valid 时，@Min/@Max 完全失效，
+     * 热量能被改成负数、餐次能改成 9（库里出现枚举外的脏数据）
+     */
+    @Test
+    void testUpdateDietRecordRejectsInvalidFields() throws Exception {
+        User user = newTestUser("test-openid-update-valid");
+        String token = jwtUtil.generateToken(user.getId());
+        Long recordId = newTestRecord(user.getId(), 1, "鸡蛋", 70).getId();
+
+        // 热量为负数 → 400
+        mockMvc.perform(put("/api/diet/" + recordId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"calories\": -5}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("热量不能为负数"));
+
+        // 餐次越界 → 400
+        mockMvc.perform(put("/api/diet/" + recordId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mealType\": 9}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400));
+
+        // 食物名称空串 → 400（部分更新语义下，置空请传 null）
+        mockMvc.perform(put("/api/diet/" + recordId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"foodName\": \"\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400));
+
+        // 合法更新仍正常生效
+        mockMvc.perform(put("/api/diet/" + recordId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"foodName\": \"燕麦片\", \"calories\": 150}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.foodName").value("燕麦片"))
+                .andExpect(jsonPath("$.data.calories").value(150));
+    }
+
+    /**
+     * 回归：查询参数缺失应返回 400，而不是被当作服务器异常给 500
+     *
+     * 背景：URL 查询参数绑定失败抛的是 BindException，
+     * 它不是 MethodArgumentNotValidException 的子类（反而是父类），
+     * 全局异常处理没接住就会落到兜底 Exception 分支
+     */
+    @Test
+    void testQueryMissingParamsReturnsBadRequest() throws Exception {
+        User user = newTestUser("test-openid-query-valid");
+        String token = jwtUtil.generateToken(user.getId());
+
+        // 两个日期都不传
+        mockMvc.perform(get("/api/diet/query")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("日期不能为空")));
+
+        // 只传开始日期
+        mockMvc.perform(get("/api/diet/query")
+                        .header("Authorization", "Bearer " + token)
+                        .param("startDate", LocalDate.now().toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400));
+    }
+
+    /**
+     * 测试用户数据隔离：只能改自己的记录
+     */
+    @Test
+    void testUpdateOtherUsersRecordForbidden() throws Exception {
+        User owner = newTestUser("test-openid-owner");
+        User other = newTestUser("test-openid-other");
+        Long recordId = newTestRecord(owner.getId(), 1, "牛奶", 100).getId();
+
+        mockMvc.perform(put("/api/diet/" + recordId)
+                        .header("Authorization", "Bearer " + jwtUtil.generateToken(other.getId()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"calories\": 1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(1003));  // NO_PERMISSION
+    }
+
+    /**
+     * 造一个测试用户（openid 唯一，重复运行不会破唯一索引）
+     */
+    private User newTestUser(String openid) {
+        User user = new User();
+        user.setOpenid(openid);
+        user.setNickname("测试用户");
+        user.setStatus(0);
+        return userRepository.save(user);
+    }
+
+    /**
+     * 造一条测试饮食记录
+     */
+    private DietRecord newTestRecord(Long userId, Integer mealType, String foodName, Integer calories) {
+        DietRecord record = new DietRecord();
+        record.setUserId(userId);
+        record.setRecordDate(LocalDate.now());
+        record.setMealType(mealType);
+        record.setFoodName(foodName);
+        record.setCalories(calories);
+        return dietRecordRepository.save(record);
     }
 }
