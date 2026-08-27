@@ -50,7 +50,8 @@ src/main/java/com/wyy/fm/
 ├── config/                     # 配置类
 │   ├── AuthInterceptor.java    # JWT 鉴权拦截器
 │   ├── WebMvcConfig.java       # 注册拦截器、配置拦截路径
-│   ├── CorsConfig.java         # 跨域配置
+│   ├── CorsConfig.java         # 跨域配置（来源走 app.cors.allowed-origin-patterns）
+│   ├── StartupSafetyCheck.java # 启动自检：开发专用开关在非 dev 下拒绝启动
 │   └── RestTemplateConfig.java # RestTemplate 配置
 ├── controller/                 # REST 接口层（只负责接收请求、调用 Service、返回 Result）
 ├── service/                    # 业务接口层
@@ -101,7 +102,9 @@ throw new IllegalArgumentException("参数错误");
 - 新增公开接口时，必须在 `WebMvcConfig.addInterceptors()` 中添加 `excludePathPatterns`
 - 拦截范围只有 `/api/**`；`/health`、`/version` 本就在范围外，不需要（也不应该）再写 exclude
 - 跨域来源走配置：`app.cors.allowed-origin-patterns`（环境变量 `CORS_ALLOWED_ORIGIN_PATTERNS`），**禁止写 `*` 又开 credentials**
-- 两个只能开在开发环境的开关：`wx.miniapp.mock-enabled`（mock 登录）、`springdoc.*.enabled`（接口文档），生产默认 false
+- 两个只能开在开发环境的开关：`wx.miniapp.mock-enabled`（mock 登录）、`springdoc.*.enabled`（接口文档）；
+  跨域来源里的通配符与 `null` 也属开发专用。mock、越界来源、以及不合格 JWT 密钥（空/示例值/UTF-8 长度<32 字节）
+  由 `StartupSafetyCheck` 在非 dev profile 启动时直接抛异常拦住，**新增同类开发便利开关时要同步往该自检里加一条**
 - 获取当前用户 ID：`request.getAttribute(AuthInterceptor.CURRENT_USER_ID)`
 
 ### 4. 实体与数据库

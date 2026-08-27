@@ -46,7 +46,8 @@ psql -d fmdb -c 'SELECT id, openid, nickname FROM users;'
 
 > dev profile 默认打开了微信登录 mock（`wx.miniapp.mock-enabled=true`），
 > 没有真实小程序密钥也能调通 `/api/user/wx-login` 拿 token：任意 `code` 会映射成
-> 一个稳定的 `mock-openid-xxx` 用户。生产环境该开关默认关闭，且绝不允许打开。
+> 一个稳定的 `mock-openid-xxx` 用户。该开关默认关闭，且**即使误设为 true，
+> 非 dev profile 启动也会被 `StartupSafetyCheck` 直接报错拦住**（见下文“启动自检”）。
 
 ### 生产环境启动
 
@@ -76,6 +77,24 @@ export WX_MOCK_LOGIN=false
 # 启动
 mvn spring-boot:run
 ```
+
+### 启动自检
+
+`config/StartupSafetyCheck.java` 在启动时强校验下面三项，非 dev profile 命中就直接抛
+`IllegalStateException` 阻止启动（而不是只打一条容易被忽略的 WARN）：
+
+| 开关 | 非 dev 时的行为 |
+|------|----------------|
+| `wx.miniapp.mock-enabled=true` | 拒绝启动（该开关会让任意 code 换到有效 token，等同关闭鉴权） |
+| `app.cors.allowed-origin-patterns` 含通配符或 `null` | 拒绝启动（生产只允许完整的协议+域名，或留空） |
+| `jwt.secret` 为空/仍是文档示例值/长度 < 32 | 拒绝启动（弱密钥可被伪造任意用户 token） |
+
+因此本地调试请始终用 `-Dspring-boot.run.profiles=dev`，不要把 dev 的配置值抄到默认（生产）profile。
+
+> 接口文档（`SWAGGER_ENABLED`）不在硬性拦截范围内：它默认 false，但线上临时排查需要显式打开的能力，
+> 因此只做“默认关闭 + 用完关回去”的约定，不设启动红线。
+
+生成合格密钥：`openssl rand -base64 48`，通过环境变量 `JWT_SECRET` 传入，**不要把真实密钥写进代码或配置文件**。
 
 ## API 接口
 
@@ -222,15 +241,20 @@ wx:
     mock-enabled: true                          # 无需真实微信密钥即可登录
 ```
 
+> 上面两个脚本相关配置是**成套的强制依赖**：缺 `mode: always` 则在 PostgreSQL 上根本不执行 data.sql
+> （默认值 embedded 仅对内存库生效）；缺 `defer-datasource-initialization: true` 则脚本跑在建表前，
+> 空库首次启动报“表不存在”。另外 data.sql 必须写成幂等（`WHERE NOT EXISTS`）：dev 用 `ddl-auto: update`
+> 会保留数据，脚本每次启动都重跑。生产 profile 是 `sql.init.mode: never` + `ddl-auto: validate`，不碰这份脚本。
+
 ## 环境变量一览
 
 | 变量 | 作用 | 默认值 |
 |------|------|--------|
 | `SUPABASE_HOST` / `SUPABASE_PORT` / `SUPABASE_DB` / `SUPABASE_USER` / `SUPABASE_PASSWORD` | PG 连接 | 仅生产需要 |
 | `JWT_SECRET` | JWT 签名密钥（≥ 32 字符） | 无默认值，不配则启动失败（dev 有专用默认值） |
-| `WX_APPID` / `WX_SECRET` | 小程序凭证 | 占位值，真实登录必须配 |
-| `WX_MOCK_LOGIN` | 本地 mock 登录 | `false` |
-| `CORS_ALLOWED_ORIGIN_PATTERNS` | 允许的跨域来源 | 空（不放行） |
+| `WX_APPID` / `WX_SECRET` | 小程序凭证（映射到配置项 `wx.miniapp.appid` / `wx.miniapp.secret`） | 占位值，真实登录必须配 |
+| `WX_MOCK_LOGIN` | 本地 mock 登录 | `false`（非 dev 开启会直接启动失败） |
+| `CORS_ALLOWED_ORIGIN_PATTERNS` | 允许的跨域来源 | 空（不放行）；含通配符或 `null` 时非 dev 启动失败 |
 | `SWAGGER_ENABLED` | 是否开放接口文档 | `false` |
 
 ## 常用命令
@@ -260,7 +284,8 @@ mvn clean
 2. **环境变量**：配置 `SUPABASE_HOST`、`SUPABASE_USER`、`SUPABASE_PASSWORD`、`SUPABASE_DB`、`JWT_SECRET`
 3. **微信配置**：配置 `WX_APPID`、`WX_SECRET`，并确认 `WX_MOCK_LOGIN` 未开启
 4. **跨域与文档**：按实际前端域名配 `CORS_ALLOWED_ORIGIN_PATTERNS`；确认 `SWAGGER_ENABLED=false`
-5. **启动自检**：看启动日志有无“微信登录 mock 已开启”告警，有则不能上线
+5. **启动自检**：确认服务正常启动即可——非 dev profile 下若开着 mock 登录或 CORS 填了 `*`/`null`，
+   `StartupSafetyCheck` 会直接报错阻止启动（不依赖人工看日志告警）
 6. **服务器**：部署 jar 包，使用 `java -jar` 启动
 7. **域名/SSL**：配置 HTTPS（小程序强制要求）
 
@@ -300,9 +325,9 @@ CREATE TABLE diet_records (
 CREATE INDEX idx_user_date ON diet_records(user_id, record_date);
 ```
 
-> **已有库注意**：早期版本把 `gender`/`status` 建成了 `SMALLINT`，与实体的 `Integer` 字段不一致，
+> **已有库注意（破坏性变更）**：早期版本把 `gender`/`status` 建成了 `SMALLINT`，而实体字段是 `Integer`，
 > 生产 `ddl-auto: validate` 会报 `wrong column type encountered in column [gender]` 且服务无法启动。
-> 升级到本版本前先执行一次：
+> 实体侧已统一为 `Integer`（不再写 `columnDefinition`），**部署本版本前必须先对目标库执行一次**：
 >
 > ```sql
 > ALTER TABLE users ALTER COLUMN gender TYPE integer,
