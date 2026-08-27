@@ -73,17 +73,23 @@ public class User extends BaseEntity {
      * - 0：未知（默认）
      * - 1：男
      * - 2：女
-     * - columnDefinition：指定数据库字段类型
+     *
+     * 为什么不写 columnDefinition：
+     * - 写 "smallint default 0" 会让 ddl-auto=update 生成
+     *   `alter column gender set data type smallint default 0`，PostgreSQL 不支持该语法（启动刷 DDL 错误）
+     * - 只写 "smallint" 也不行：Java 字段是 Integer，Hibernate 校验时期望 int4，
+     *   生产 ddl-auto=validate 会直接报 wrong column type，服务根本起不来
+     * - 所以类型交给 Hibernate（Integer -> integer），默认值交给 Java 字段初始值，
+     *   与 DietRecord.mealType（Integer + integer）保持同一口径
      */
-    @Column(columnDefinition = "smallint default 0")
-    private Integer gender;
+    private Integer gender = 0;
 
     /**
      * 账号状态
      * - 0：正常（默认）
      * - 1：禁用（被封禁）
      * - 用于控制用户是否可以使用系统
+     * - 类型与默认值处理同 gender
      */
-    @Column(columnDefinition = "smallint default 0")
-    private Integer status;
+    private Integer status = 0;
 }

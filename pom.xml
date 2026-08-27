@@ -47,13 +47,6 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- H2 Database (开发环境) -->
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-
         <!-- Validation -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -1,29 +1,55 @@
-# 开发环境配置 - 使用 H2 内存数据库
+# 开发环境配置 - 使用本地 PostgreSQL
 spring:
   config:
     activate:
       on-profile: dev
 
   datasource:
-    url: jdbc:h2:mem:fmdb
-    username: sa
+    url: jdbc:postgresql://localhost:5432/fmdb
+    username: wangyunyou
     password:
-    driver-class-name: org.h2.Driver
-
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
+    driver-class-name: org.postgresql.Driver
 
   jpa:
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: update
     show-sql: true
+    # 让 data.sql 在 Hibernate 建完表之后执行，否则新库首次启动会“表不存在”
+    defer-datasource-initialization: true
     properties:
       hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
+
+  # 开发环境自动执行 data.sql 种子数据（脚本已写成幂等，重启不会插重复数据）
+  sql:
+    init:
+      mode: always
+
+# 开发环境放开本地来源，方便 H5 / 浏览器调试（test-api.html 以 file:// 打开时 Origin 为 null）
+# 生产默认不配，见 application.yml
+app:
+  cors:
+    allowed-origin-patterns: "http://localhost:*,http://127.0.0.1:*,null"
+
+# 开发环境打开接口文档：http://localhost:8080/swagger-ui.html
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+
+# 开发环境没有真实小程序密钥，打开 mock 登录：任意 code 即可拿到 token
+# 严禁在生产设 WX_MOCK_LOGIN=true
+wx:
+  miniapp:
+    mock-enabled: true
+
+# JWT 开发环境默认值（仅开发用，生产环境必须通过环境变量提供）
+jwt:
+  secret: ${JWT_SECRET:dev-default-secret-for-testing-only}
 
 logging:
   level:
-    com.wyy.fm: debug
-    org.hibernate.SQL: debug
+    com.wyy.fm: info
+    org.hibernate.SQL: warn

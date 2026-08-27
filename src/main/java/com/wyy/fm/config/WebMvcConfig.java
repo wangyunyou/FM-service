@@ -22,16 +22,18 @@ public class WebMvcConfig implements WebMvcConfigurer {
 
     /**
      * 注册拦截器
-     * 
-     * 配置哪些路径需要拦截，哪些路径放行
+     *
+     * 拦截范围只写了 /api/**，因此：
+     * - /health、/version 本来就不在拦截路径内，不需要再加 exclude（历史上的冗余配置，已删）
+     * - 新增公开接口时，必须放在 /api/** 下并加到 excludePathPatterns，
+     *   或者放在 /api/** 之外（后者更容易忘记鉴权，推荐前者）
      */
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(authInterceptor)
                 .addPathPatterns("/api/**")  // 拦截所有 /api/ 开头的请求
                 .excludePathPatterns(        // 排除这些路径（不需要登录）
-                        "/api/user/wx-login",  // 登录接口
-                        "/health"              // 健康检查
+                        "/api/user/wx-login"  // 登录接口：此时还没有 token
                 );
     }
 }

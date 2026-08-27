@@ -18,6 +18,7 @@ spring:
       max-lifetime: 1200000
 
   jpa:
+    # 生产不自动建表（validate 只校验实体与表结构是否一致）；建表语句见 README
     hibernate:
       ddl-auto: validate
     show-sql: false
@@ -25,6 +26,12 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
+
+  # 种子脚本开关（默认值 embedded 对 PostgreSQL 等于不执行，这里显式写死避免误执行）
+  # data.sql 仅用于本地开发造数据，在 application-dev.yml 里打开
+  sql:
+    init:
+      mode: never
 
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
@@ -36,11 +43,29 @@ wx:
   miniapp:
     appid: ${WX_APPID:your-appid}
     secret: ${WX_SECRET:your-secret}
+    # mock 登录：开启后任意 code 都能换 token，仅供本地开发（dev profile 里置 true）
+    mock-enabled: ${WX_MOCK_LOGIN:false}
+
+# 应用自定义配置
+app:
+  cors:
+    # 允许跨域的来源，逗号分隔（如 https://fm.example.com,https://admin.example.com）
+    # 留空 = 不放行任何浏览器跨域来源（小程序原生请求不受影响）
+    # 绝不要为了图省事在生产填 *：与 allowCredentials 同时生效等于允许任意站点带凭证调用
+    allowed-origin-patterns: ${CORS_ALLOWED_ORIGIN_PATTERNS:}
 
 # JWT 配置
 jwt:
   secret: ${JWT_SECRET}  # 必须通过环境变量提供，不使用默认值
   expiration: 86400000  # 24 小时（毫秒）
+
+# 接口文档（默认关闭，避免生产把全量接口清单公开暴露）
+# 本地开发在 application-dev.yml 里打开；线上临时排查可设 SWAGGER_ENABLED=true，用完关掉
+springdoc:
+  api-docs:
+    enabled: ${SWAGGER_ENABLED:false}
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:false}
 
 # Actuator 监控配置（仅暴露必要端点，最小化信息泄露）
 management:

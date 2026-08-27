@@ -24,7 +24,8 @@ import org.springframework.web.servlet.HandlerInterceptor;
  * 
  * 配置位置：
  * - WebMvcConfig.java 里注册拦截器
- * - 排除路径：/api/user/wx-login、/health
+ * - 拦截 /api/**，排除路径：/api/user/wx-login
+ * - 注：/health 不在 /api/** 下，所以不需要排除就能公开访问
  */
 @Component
 @RequiredArgsConstructor
