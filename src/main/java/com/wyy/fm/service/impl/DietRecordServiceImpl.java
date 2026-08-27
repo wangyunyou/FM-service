@@ -154,31 +154,46 @@ public class DietRecordServiceImpl implements DietRecordService {
      */
     @Override
     public DietStatisticsResponse queryWithStats(Long userId, QueryDietRecordRequest request) {
-        // 1. 校验日期范围
+        // 1. 先判区间本身是否倒挂（与是否涉及未来无关）
         if (request.getStartDate().isAfter(request.getEndDate())) {
             throw new BusinessException(ErrorCode.DIET_DATE_INVALID);
         }
-        //    结束日期不允许在未来：前端 Picker 锁了 end，但其他客户端能递 2099-12-31，
-        //    那会把“区间天数”算成一个无意义的巨值，统计口径直接失真
-        requireNotFuture(request.getEndDate(), "结束日期");
-        //    跨度上限：接口无分页，跨度就是一次的返回量（见 MAX_QUERY_RANGE_DAYS 注释）
-        long span = request.getEndDate().toEpochDay() - request.getStartDate().toEpochDay() + 1;
+
+        // 2. 把结束日期**收敛**到今天，而不是拒绝
+        //    「本周 / 本月」这类预设区间的末端天然落在未来：周五查本周，endDate=周日，
+        //    比今天晚两天。上一版在这里直接抛 2002，实测把首页的 Promise.all 整个打挂 ——
+        //    今日记录被清空 + 弹「结束日期不能晚于今天」。
+        //    未来本来就不可能有记录，收敛与拒绝在数据上完全等价，但收敛不会误伤合法调用方
+        //    （统计页自定义区间、Swagger、test-api.html 同理）。
+        //    只有「写入未来的记录」那种数据录入错误才需要报错，见 create() 的 requireNotFuture。
+        LocalDate today = LocalDate.now();
+        LocalDate start = request.getStartDate();
+        LocalDate end = request.getEndDate().isAfter(today) ? today : request.getEndDate();
+
+        //    收敛后 start 反而跑到 end 后面，只可能是整个区间都在未来（如 startDate=明天）
+        if (start.isAfter(end)) {
+            throw new BusinessException(ErrorCode.DIET_DATE_INVALID, "开始日期不能晚于今天");
+        }
+
+        // 3. 跨度上限：接口无分页，跨度就是一次的返回量（见 MAX_QUERY_RANGE_DAYS 注释）
+        //    按收敛后的区间算，所以 endDate=2099 不会再撑出「区间天数 29000」这种无意义结果
+        long span = end.toEpochDay() - start.toEpochDay() + 1;
         if (span > MAX_QUERY_RANGE_DAYS) {
             throw new BusinessException(ErrorCode.DIET_DATE_RANGE_TOO_LONG);
         }
 
-        // 2. 查询明细列表
+        // 4. 查询明细列表
         List<DietRecord> records = dietRecordRepository
                 .findByUserIdAndRecordDateBetweenOrderByRecordDateAscMealTypeAsc(
-                        userId, request.getStartDate(), request.getEndDate());
+                        userId, start, end);
 
-        // 3. 统计总热量
+        // 5. 统计总热量
         Integer totalCalories = dietRecordRepository
-                .sumCaloriesByUserIdAndDateRange(userId, request.getStartDate(), request.getEndDate());
+                .sumCaloriesByUserIdAndDateRange(userId, start, end);
 
-        // 4. 按餐次统计
+        // 6. 按餐次统计
         List<Object[]> mealStats = dietRecordRepository
-                .sumCaloriesByMealType(userId, request.getStartDate(), request.getEndDate());
+                .sumCaloriesByMealType(userId, start, end);
 
         // 将查询结果转换为 Map<餐次名称, 热量>
         Map<String, Integer> caloriesByMeal = new HashMap<>();
@@ -188,7 +203,7 @@ public class DietRecordServiceImpl implements DietRecordService {
             caloriesByMeal.put(DietRecordResponse.getMealTypeName(mealType), calories);
         }
 
-        // 5. 计算日均热量
+        // 7. 计算日均热量
         //    分母用「有记录的天数」，不是查询区间的总天数
         //    否则查整月（31 天）但只记了 1 天时，会算出 900/31=29 这种无意义的数字
         //    records 上一步已经查出来了，这里用 Stream 去重计数即可，不必再访问数据库
@@ -200,13 +215,13 @@ public class DietRecordServiceImpl implements DietRecordService {
         // days 为 0 说明区间内没有任何记录，直接返回 0（同时避免了除零异常）
         int avgCalories = days == 0 ? 0 : totalCalories / (int) days;
 
-        // 6. 将实体列表转换为 DTO 列表
+        // 8. 将实体列表转换为 DTO 列表
         // Stream API：函数式编程风格
         List<DietRecordResponse> recordResponses = records.stream()
                 .map(this::toResponse)  // 将每个 DietRecord 转换为 DietRecordResponse
                 .collect(Collectors.toList());
 
-        // 7. 构建响应对象
+        // 9. 构建响应对象
         return DietStatisticsResponse.builder()
                 .totalCalories(totalCalories)
                 .caloriesByMeal(caloriesByMeal)

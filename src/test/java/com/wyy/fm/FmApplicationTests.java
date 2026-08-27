@@ -550,13 +550,61 @@ class FmApplicationTests {
                 .andExpect(jsonPath("$.code").value(2002))
                 .andExpect(jsonPath("$.message").value("记录日期不能晚于今天"));
 
+        // 查询的 endDate 在未来不再报错，见下面 queryClampsFutureEndDateToToday
         mockMvc.perform(get("/api/diet/query")
                         .header("Authorization", "Bearer " + token)
                         .param("startDate", "2020-01-01")
                         .param("endDate", "2099-12-31"))
                 .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(2003));
+    }
+
+    /**
+     * 回归：查询的 endDate 在未来必须「收敛到今天」，而不是报错
+     *
+     * 背景（上一轮我自己引入的故障）：给 endDate 加了「不得晚于今天」的硬校验后，
+     *      首页 currentWeekRange() 返回的「周一~周日」在周五查就是查到未来，
+     *      后端返回 2002 → 前端 Promise.all 整个 reject → 今日记录被清空，
+     *      还弹一条「结束日期不能晚于今天」（用户在模拟器里直接看到）。
+     *      统计页的「本周」「本月」两个预设 tab 同理。
+     * 期望：未来日期收敛到今天（数据完全等价，未来不可能有记录），
+     *      只有整个区间都在未来（startDate 也晚于今天）才算区间不合法。
+     */
+    @Test
+    void queryClampsFutureEndDateToToday() throws Exception {
+        User user = newTestUser("test-openid-clamp");
+        String token = jwtUtil.generateToken(user.getId());
+        LocalDate today = LocalDate.now();
+        newTestRecord(user.getId(), 1, "鸡蛋", 70);
+
+        // 1) 周五查「本周」这种末端落在未来的区间：200，且今天的记录要查得到
+        //    （今天往前 4 天 = 本周一，今天往后 2 天 = 本周日，与前端 currentWeekRange 同形）
+        mockMvc.perform(get("/api/diet/query")
+                        .header("Authorization", "Bearer " + token)
+                        .param("startDate", today.minusDays(4).toString())
+                        .param("endDate", today.plusDays(2).toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.totalCalories").value(70))
+                .andExpect(jsonPath("$.data.recordCount").value(1));
+
+        // 2) 整个区间都在未来 → 区间不合法（这条是真错误，不是末端越界）
+        mockMvc.perform(get("/api/diet/query")
+                        .header("Authorization", "Bearer " + token)
+                        .param("startDate", today.plusDays(1).toString())
+                        .param("endDate", today.plusDays(5).toString()))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(2002))
-                .andExpect(jsonPath("$.message").value("结束日期不能晚于今天"));
+                .andExpect(jsonPath("$.message").value("开始日期不能晚于今天"));
+
+        // 3) 跨度按收敛后的区间算：startDate=今天、endDate=2099 收敛成一天，不该报 2003
+        mockMvc.perform(get("/api/diet/query")
+                        .header("Authorization", "Bearer " + token)
+                        .param("startDate", today.toString())
+                        .param("endDate", "2099-12-31"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.recordCount").value(1));
     }
 
     /**
