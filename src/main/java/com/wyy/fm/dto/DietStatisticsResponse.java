@@ -54,7 +54,8 @@ public class DietStatisticsResponse {
 
     /**
      * 日均热量
-     * - 总热量 / 天数
+     * - 总热量 / 「有记录的天数」（不是查询区间的总天数）
+     * - 例：查 8 月全月，但只在 8/27 记了 900 kcal → 返回 900，而不是 900/31=29
      * - 用于前端展示"平均每天摄入多少热量"
      */
     private Integer avgCaloriesPerDay;

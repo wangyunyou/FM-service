@@ -10,7 +10,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -161,8 +160,16 @@ public class DietRecordServiceImpl implements DietRecordService {
         }
 
         // 5. 计算日均热量
-        long days = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate()) + 1;
-        int avgCalories = records.isEmpty() ? 0 : totalCalories / (int) days;
+        //    分母用「有记录的天数」，不是查询区间的总天数
+        //    否则查整月（31 天）但只记了 1 天时，会算出 900/31=29 这种无意义的数字
+        //    records 上一步已经查出来了，这里用 Stream 去重计数即可，不必再访问数据库
+        long days = records.stream()
+                .map(DietRecord::getRecordDate)   // 取每条记录的日期
+                .distinct()                       // 同一天多条只算一次
+                .count();
+
+        // days 为 0 说明区间内没有任何记录，直接返回 0（同时避免了除零异常）
+        int avgCalories = days == 0 ? 0 : totalCalories / (int) days;
 
         // 6. 将实体列表转换为 DTO 列表
         // Stream API：函数式编程风格

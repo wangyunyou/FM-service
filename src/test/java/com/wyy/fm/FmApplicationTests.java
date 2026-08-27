@@ -159,6 +159,41 @@ class FmApplicationTests {
     }
 
     /**
+     * 回归测试：日均热量的分母必须是「有记录的天数」
+     *
+     * 背景：旧实现用「查询区间总天数」做分母，导致查整月只记了 1 天时，
+     *      300 kcal 被算成 300/31 = 9，前端展示出一个毫无意义的日均值
+     * 期望：300 kcal / 1 个记录日 = 300
+     *
+     * 类上有 @Transactional，本方法造的数据会自动回滚，不会污染 dev 库
+     */
+    @Test
+    void testAvgCaloriesPerDayUsesRecordedDays() {
+        Long userId = newTestUser("test-openid-avg").getId();
+        LocalDate today = LocalDate.now();
+
+        // 只在今天记 1 条
+        DietRecord record = new DietRecord();
+        record.setUserId(userId);
+        record.setRecordDate(today);
+        record.setMealType(1);  // 早餐
+        record.setFoodName("苹果");
+        record.setCalories(300);
+        dietRecordRepository.save(record);
+
+        // 但查询区间横跨 31 天
+        QueryDietRecordRequest queryRequest = new QueryDietRecordRequest();
+        queryRequest.setStartDate(today.minusDays(30));
+        queryRequest.setEndDate(today);
+
+        DietStatisticsResponse stats = dietRecordService.queryWithStats(userId, queryRequest);
+
+        assertEquals(300, stats.getTotalCalories());
+        assertEquals(1, stats.getRecordCount());
+        assertEquals(300, stats.getAvgCaloriesPerDay());  // 关键断言：旧代码这里会返回 9
+    }
+
+    /**
      * 测试健康检查接口
      */
     @Test
