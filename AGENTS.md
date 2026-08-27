@@ -9,7 +9,7 @@
 | Java | 17（`JAVA_HOME` 已在 `~/.zshrc` 固定为 openjdk@17） |
 | Spring Boot | 3.2.5 |
 | ORM | Spring Data JPA（Hibernate） |
-| 数据库 | 生产 PostgreSQL（Supabase）/ 开发 H2 内存库 |
+| 数据库 | PostgreSQL（生产 Supabase / 开发本地实例 `fmdb`） |
 | 认证 | JWT（jjwt 0.12.5），AuthInterceptor 拦截 |
 | 构建 | Maven |
 | 工具库 | Lombok、Jakarta Validation |
@@ -17,7 +17,8 @@
 ## 启动与构建
 
 ```bash
-# 开发环境（H2 内存库，自动建表）
+# 开发环境（本地 PostgreSQL，自动建表 + data.sql 种子数据）
+brew services start postgresql@16   # 首次需启动 PG；库不存在时 createdb fmdb
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 # 生产环境（需要 Supabase 环境变量）
@@ -26,12 +27,14 @@ SUPABASE_HOST=xxx SUPABASE_USER=xxx SUPABASE_PASSWORD=xxx SUPABASE_DB=xxx mvn sp
 # 编译检查
 mvn compile
 
-# 跑测试
+# 跑测试（连 dev profile 的本地库，需先启 PG；用例自带 @Transactional 回滚）
 mvn test
 ```
 
 - 默认端口 `8080`
-- 开发环境 H2 Console：`http://localhost:8080/h2-console`（JDBC URL: `jdbc:h2:mem:fmdb`）
+- 开发环境接口文档：`http://localhost:8080/swagger-ui.html`（生产默认关闭）
+- 开发环境看数据：`psql -d fmdb -c 'SELECT * FROM diet_records'`
+- 开发环境没有真实微信密钥：dev profile 已开 `wx.miniapp.mock-enabled`，任意 `code` 可换 token
 
 ## 包结构
 
@@ -96,6 +99,9 @@ throw new IllegalArgumentException("参数错误");
 - `AuthInterceptor` 拦截所有 `/api/**` 路径
 - 白名单（不需要 token）：`/api/user/wx-login`、`/health`
 - 新增公开接口时，必须在 `WebMvcConfig.addInterceptors()` 中添加 `excludePathPatterns`
+- 拦截范围只有 `/api/**`；`/health`、`/version` 本就在范围外，不需要（也不应该）再写 exclude
+- 跨域来源走配置：`app.cors.allowed-origin-patterns`（环境变量 `CORS_ALLOWED_ORIGIN_PATTERNS`），**禁止写 `*` 又开 credentials**
+- 两个只能开在开发环境的开关：`wx.miniapp.mock-enabled`（mock 登录）、`springdoc.*.enabled`（接口文档），生产默认 false
 - 获取当前用户 ID：`request.getAttribute(AuthInterceptor.CURRENT_USER_ID)`
 
 ### 4. 实体与数据库
@@ -104,7 +110,8 @@ throw new IllegalArgumentException("参数错误");
 - 使用 `@Data` + `@EqualsAndHashCode(callSuper = true)`
 - 表名用 `@Table(name = "xxx")`，字段名用 `@Column(name = "xxx")`
 - 关联关系用 `userId` 字段（逻辑外键），不用 `@ManyToOne`
-- 生产环境 `ddl-auto: validate`（不会自动建表），开发环境 `ddl-auto: create-drop`
+- 生产环境 `ddl-auto: validate`（不会自动建表），开发环境 `ddl-auto: update`
+- 种子数据写 `src/main/resources/data.sql`，必须写成幂等（`WHERE NOT EXISTS`），用业务唯一键定位而不是硬编码自增 ID；只在 dev profile 执行（`spring.sql.init.mode`）
 
 ### 5. Service 层
 
@@ -118,13 +125,15 @@ throw new IllegalArgumentException("参数错误");
 - 标注 `@RestController` + `@RequestMapping("/api/xxx")`
 - 只负责：接收参数 → 提取 userId → 调用 Service → 包装 Result
 - 不包含业务逻辑
-- 请求体 DTO 加 `@Valid` 注解触发校验
+- **每个写请求入参都要加 `@Valid`**（包括 `@RequestBody` 和 GET 查询参数对象）；DTO 上写了 `@NotNull`/`@Min`/`@Size` 却没在 Controller 加 `@Valid`，校验一行都不会生效
+- GET 查询参数绑定失败抛 `BindException`（不是 `MethodArgumentNotValidException`），两者都要在 `GlobalExceptionHandler` 里接住，否则 400 会变成 500
 
 ### 7. DTO 规范
 
 - 请求 DTO 命名：`CreateXxxRequest` / `UpdateXxxRequest` / `QueryXxxRequest`
 - 响应 DTO 命名：`XxxResponse`
 - 校验注解：`@NotNull`、`@NotBlank`、`@Size` 等（Jakarta Validation）
+- 字符串长度上限必须对齐实体列定义（如 `foodName` 对齐 `VARCHAR(200)`），不先拦住会在写库时变 500
 - 使用 Lombok `@Data` / `@Builder`
 
 ### 8. RESTful 路径

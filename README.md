@@ -6,7 +6,7 @@ FM 小程序的后端 API 服务，提供用户管理、微信登录、饮食记
 
 - **Java 17** + **Spring Boot 3.2.5**
 - **Spring Data JPA** (Hibernate)
-- **数据库**：H2（开发环境）/ PostgreSQL（生产环境，Supabase）
+- **数据库**：PostgreSQL（开发用本地实例，生产用 Supabase）
 - **认证**：JWT（jjwt 0.12.5）
 - **构建**：Maven
 - **工具库**：Lombok、Jakarta Validation
@@ -17,6 +17,7 @@ FM 小程序的后端 API 服务，提供用户管理、微信登录、饮食记
 
 - JDK 17+
 - Maven 3.6+
+- PostgreSQL 14+（开发和测试都连真实 PG，`brew services start postgresql@16`）
 
 ### 开发环境启动
 
@@ -25,16 +26,27 @@ FM 小程序的后端 API 服务，提供用户管理、微信登录、饮食记
 git clone https://github.com/wangyunyou/FM-service.git
 cd FM-service
 
-# 使用 H2 内存数据库启动（无需额外配置）
+# 首次准备数据库（库名需与 application-dev.yml 一致）
+createdb fmdb
+
+# 启动（dev profile：本地 PG + 自动建表 + data.sql 种子数据）
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
 启动后访问：
 - API 服务：`http://localhost:8080`
-- H2 控制台：`http://localhost:8080/h2-console`
-  - JDBC URL：`jdbc:h2:mem:fmdb`
-  - 用户名：`sa`
-  - 密码：（空）
+- 接口文档：`http://localhost:8080/swagger-ui.html`（仅 dev profile 开启）
+- 健康检查：`http://localhost:8080/health`
+
+连上本地库后可直接查数据：
+
+```bash
+psql -d fmdb -c 'SELECT id, openid, nickname FROM users;'
+```
+
+> dev profile 默认打开了微信登录 mock（`wx.miniapp.mock-enabled=true`），
+> 没有真实小程序密钥也能调通 `/api/user/wx-login` 拿 token：任意 `code` 会映射成
+> 一个稳定的 `mock-openid-xxx` 用户。生产环境该开关默认关闭，且绝不允许打开。
 
 ### 生产环境启动
 
@@ -48,9 +60,18 @@ export SUPABASE_PASSWORD=your-password
 export SUPABASE_DB=postgres
 export JWT_SECRET=your-jwt-secret-key
 
-# 微信小程序配置（通过 application.yml 或环境变量）
-export WX_MINIAPP_APPID=your-appid
-export WX_MINIAPP_SECRET=your-secret
+# 微信小程序配置（环境变量名与 application.yml 保持一致）
+export WX_APPID=your-appid
+export WX_SECRET=your-secret
+
+# 跨域来源（逗号分隔，仅 H5 / 浏览器调试需要；小程序原生请求不受同源策略限制）
+# 留空表示不放行任何浏览器跨域来源；绝对不要为了省事填 *
+export CORS_ALLOWED_ORIGIN_PATTERNS=https://fm.example.com
+
+# 接口文档：生产默认关闭，临时排查问题才设 true，用完关掉
+# 微信登录 mock：生产必须保持 false（默认值）
+export SWAGGER_ENABLED=false
+export WX_MOCK_LOGIN=false
 
 # 启动
 mvn spring-boot:run
@@ -75,11 +96,16 @@ mvn spring-boot:run
 | DELETE | `/api/diet/{id}` | 删除饮食记录 | ✅ |
 | GET | `/api/diet/query` | 查询记录+统计 | ✅ |
 
-### 健康检查
+### 系统与文档
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/health` | 服务健康检查 |
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| GET | `/health` | 服务健康检查 | ❌ |
+| GET | `/version` | 版本信息 | ❌ |
+| GET | `/internal/actuator/health` | Actuator 健康检查（只暴露 health） | ❌ |
+| GET | `/swagger-ui.html` | 接口文档（仅 dev / 显式开启） | ❌ |
+
+> `/health`、`/version` 不在 `/api/**` 下，因此不经过 JWT 拦截器。新增公开接口请放在 `/api/**` 内并在 `WebMvcConfig` 里显式 exclude，避免漏配鉴权。
 
 ### 认证方式
 
@@ -174,14 +200,38 @@ jwt:
 ```yaml
 spring:
   datasource:
-    url: jdbc:h2:mem:fmdb  # H2 内存数据库
+    url: jdbc:postgresql://localhost:5432/fmdb  # 本地 PostgreSQL
   jpa:
     hibernate:
-      ddl-auto: create-drop  # 自动建表，重启清空
-  h2:
-    console:
-      enabled: true
+      ddl-auto: update                          # 自动建表/改表
+    defer-datasource-initialization: true       # data.sql 在建表后执行
+  sql:
+    init:
+      mode: always                              # 执行 data.sql 种子数据（幂等）
+
+app:
+  cors:
+    allowed-origin-patterns: "http://localhost:*,http://127.0.0.1:*,null"
+
+springdoc:
+  api-docs:
+    enabled: true                               # 开发环境开放接口文档
+
+wx:
+  miniapp:
+    mock-enabled: true                          # 无需真实微信密钥即可登录
 ```
+
+## 环境变量一览
+
+| 变量 | 作用 | 默认值 |
+|------|------|--------|
+| `SUPABASE_HOST` / `SUPABASE_PORT` / `SUPABASE_DB` / `SUPABASE_USER` / `SUPABASE_PASSWORD` | PG 连接 | 仅生产需要 |
+| `JWT_SECRET` | JWT 签名密钥（≥ 32 字符） | 无默认值，不配则启动失败（dev 有专用默认值） |
+| `WX_APPID` / `WX_SECRET` | 小程序凭证 | 占位值，真实登录必须配 |
+| `WX_MOCK_LOGIN` | 本地 mock 登录 | `false` |
+| `CORS_ALLOWED_ORIGIN_PATTERNS` | 允许的跨域来源 | 空（不放行） |
+| `SWAGGER_ENABLED` | 是否开放接口文档 | `false` |
 
 ## 常用命令
 
@@ -189,7 +239,7 @@ spring:
 # 编译
 mvn compile
 
-# 运行测试
+# 运行测试（需先启动本地 PostgreSQL，测试连 dev profile 的真实库，数据自动回滚）
 mvn test
 
 # 打包
@@ -208,9 +258,11 @@ mvn clean
 
 1. **数据库**：在 Supabase 创建 PostgreSQL 数据库，手动建表（参考数据模型）
 2. **环境变量**：配置 `SUPABASE_HOST`、`SUPABASE_USER`、`SUPABASE_PASSWORD`、`SUPABASE_DB`、`JWT_SECRET`
-3. **微信配置**：配置 `WX_MINIAPP_APPID`、`WX_MINIAPP_SECRET`
-4. **服务器**：部署 jar 包，使用 `java -jar` 启动
-5. **域名/SSL**：配置 HTTPS（小程序强制要求）
+3. **微信配置**：配置 `WX_APPID`、`WX_SECRET`，并确认 `WX_MOCK_LOGIN` 未开启
+4. **跨域与文档**：按实际前端域名配 `CORS_ALLOWED_ORIGIN_PATTERNS`；确认 `SWAGGER_ENABLED=false`
+5. **启动自检**：看启动日志有无“微信登录 mock 已开启”告警，有则不能上线
+6. **服务器**：部署 jar 包，使用 `java -jar` 启动
+7. **域名/SSL**：配置 HTTPS（小程序强制要求）
 
 ### 数据库建表 SQL（PostgreSQL）
 
@@ -223,8 +275,8 @@ CREATE TABLE users (
     nickname VARCHAR(64),
     avatar_url VARCHAR(512),
     phone VARCHAR(20),
-    gender SMALLINT DEFAULT 0,
-    status SMALLINT DEFAULT 0,
+    gender INTEGER DEFAULT 0,
+    status INTEGER DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -247,6 +299,15 @@ CREATE TABLE diet_records (
 
 CREATE INDEX idx_user_date ON diet_records(user_id, record_date);
 ```
+
+> **已有库注意**：早期版本把 `gender`/`status` 建成了 `SMALLINT`，与实体的 `Integer` 字段不一致，
+> 生产 `ddl-auto: validate` 会报 `wrong column type encountered in column [gender]` 且服务无法启动。
+> 升级到本版本前先执行一次：
+>
+> ```sql
+> ALTER TABLE users ALTER COLUMN gender TYPE integer,
+>                   ALTER COLUMN status TYPE integer;
+> ```
 
 ## 开发规范
 

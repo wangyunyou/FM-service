@@ -8,7 +8,6 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * CORS 跨域配置
@@ -45,12 +44,8 @@ public class CorsConfig {
      */
     @Bean
     public CorsFilter corsFilter() {
-        // 配置里可能是空串或全空格，统一过滤掉，避免把 "" 当成一个合法来源
-        List<String> origins = allowedOriginPatterns == null ? List.of() :
-                allowedOriginPatterns.stream()
-                        .map(String::trim)
-                        .filter(pattern -> !pattern.isEmpty())
-                        .collect(Collectors.toList());
+        // 来源解析与启动自检共用（空串/空白项过滤），见 StartupSafetyCheck.normalize
+        List<String> origins = StartupSafetyCheck.normalize(allowedOriginPatterns);
 
         CorsConfiguration config = new CorsConfiguration();
         if (!origins.isEmpty()) {
