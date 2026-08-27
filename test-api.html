@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<!--
+  本地调试专用页面，仅访问 dev 环境接口，不要部署到任何对外服务（它会把接口调用细节直接摆在页面上）。
+  后端对应的开发便利能力（mock 登录、本地跨域）在非 dev profile 下会被 StartupSafetyCheck 拦住启动。
+-->
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>FM API 测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        button { background: #07c160; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 5px; }
+        button:hover { background: #06ad56; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 5px; overflow-x: auto; }
+        input, select, textarea { width: 100%; padding: 8px; margin: 5px 0; border: 1px solid #ddd; border-radius: 3px; box-sizing: border-box; }
+        .result { margin-top: 10px; }
+        /* 用背景色区分请求结果：2xx 绿、非 2xx 红，失败时一眼能看到 */
+        .result-ok pre { background: #f0faf3; border-left: 3px solid #07c160; }
+        .result-err pre { background: #fdf0f0; border-left: 3px solid #fa5151; }
+        .hint { color: #999; font-size: 12px; }
+        .field-error { color: #fa5151; font-size: 12px; min-height: 16px; }
+    </style>
+</head>
+<body>
+    <h1>🍔 FM 饮食记录 API 测试</h1>
+    <p class="hint">本地调试页。用法：起服务 <code>mvn spring-boot:run -Dspring-boot.run.profiles=dev</code> 后，双击打开本文件即可（dev 已放行 Origin 为 null 的跨域请求）。</p>
+
+    <div class="section">
+        <h2>0. 服务地址</h2>
+        <input type="text" id="baseUrl" placeholder="http://localhost:8080">
+        <p class="hint">改动后自动记在浏览器 localStorage 里，换端口/换环境不用每次改文件。</p>
+    </div>
+
+    <div class="section">
+        <h2>1. 获取 Token（dev mock 登录）</h2>
+        <p>Token: <input type="text" id="token" placeholder="点下面的按钮自动生成，也可手工粘贴"></p>
+        <input type="text" id="loginCode" value="local-debug-code" placeholder="登录 code">
+        <button onclick="generateToken()">调用 /api/user/wx-login 取 token</button>
+        <div class="field-error" id="loginError"></div>
+        <p class="hint">dev profile 开着 wx.miniapp.mock-enabled，任意 code 都会映射到同一个稳定用户；生产没有这个能力，需用真实小程序 code。</p>
+    </div>
+
+    <div class="section">
+        <h2>2. 查询用户信息</h2>
+        <button onclick="getUserInfo()">GET /api/user/info</button>
+        <div class="result" id="userInfoResult"></div>
+    </div>
+
+    <div class="section">
+        <h2>3. 查询饮食记录</h2>
+        <input type="date" id="startDate">
+        <input type="date" id="endDate">
+        <button onclick="queryDiet()">GET /api/diet/query</button>
+        <div class="field-error" id="queryError"></div>
+        <div class="result" id="dietQueryResult"></div>
+    </div>
+
+    <div class="section">
+        <h2>4. 创建饮食记录</h2>
+        <input type="date" id="recordDate">
+        <select id="mealType">
+            <option value="1">早餐</option>
+            <option value="2">午餐</option>
+            <option value="3">晚餐</option>
+            <option value="4">加餐</option>
+        </select>
+        <input type="text" id="foodName" placeholder="食物名称" value="测试食物">
+        <input type="number" id="calories" placeholder="热量(大卡)" value="300">
+        <textarea id="remark" placeholder="备注" rows="2">测试备注</textarea>
+        <button onclick="createDiet()">POST /api/diet</button>
+        <div class="field-error" id="createError"></div>
+        <div class="result" id="createDietResult"></div>
+    </div>
+
+    <script>
+        const DEFAULT_BASE_URL = 'http://localhost:8080';
+        const BASE_URL_KEY = 'fm.test.baseUrl';
+        const CODE_KEY = 'fm.test.loginCode';
+
+        const baseUrlInput = document.getElementById('baseUrl');
+        baseUrlInput.value = localStorage.getItem(BASE_URL_KEY) || DEFAULT_BASE_URL;
+        baseUrlInput.addEventListener('change', () => localStorage.setItem(BASE_URL_KEY, baseUrlInput.value.trim()));
+
+        const loginCodeInput = document.getElementById('loginCode');
+        const savedCode = localStorage.getItem(CODE_KEY);
+        if (savedCode) loginCodeInput.value = savedCode;
+        loginCodeInput.addEventListener('change', () => localStorage.setItem(CODE_KEY, loginCodeInput.value.trim()));
+
+        function getToken() {
+            return document.getElementById('token').value.trim();
+        }
+
+        function today() {
+            return new Date().toISOString().slice(0, 10);
+        }
+
+        /**
+         * 展示结果
+         *
+         * 用 textContent 而不是 innerHTML：接口返回内容不可信，拼 HTML 会被 XSS 利用
+         * @param ok 用于切换绿/红底色，让失败请求一眼可见
+         */
+        function showResult(elementId, data, ok) {
+            const box = document.getElementById(elementId);
+            box.textContent = '';
+            box.className = 'result ' + (ok ? 'result-ok' : 'result-err');
+            const pre = document.createElement('pre');
+            pre.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+            box.appendChild(pre);
+        }
+
+        function showError(elementId, message) {
+            document.getElementById(elementId).textContent = message || '';
+        }
+
+        /**
+         * 统一请求入口
+         *
+         * @returns {Promise<{status: number, body: *}>} 网络异常时 status 为 0，body 为错误对象
+         */
+        async function request(method, path, body = null) {
+            const headers = { 'Content-Type': 'application/json' };
+            const token = getToken();
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+
+            const options = { method, headers };
+            if (body) options.body = JSON.stringify(body);
+
+            let response;
+            try {
+                response = await fetch(baseUrlInput.value.trim().replace(/\/$/, '') + path, options);
+            } catch (error) {
+                // 服务没起、地址写错或跨域被拦都会落到这里，给出可行动的提示
+                return { status: 0, body: { error: '请求发不出去：' + error.message, 检查: '服务是否已启动、服务地址是否正确、CORS 是否放行当前来源' } };
+            }
+
+            const text = await response.text();
+            let parsed;
+            try {
+                parsed = text ? JSON.parse(text) : {};
+            } catch (error) {
+                // 后端返回了非 JSON（比如 500 页面），保留原文便于排查
+                return { status: response.status, body: { error: '响应不是合法 JSON', raw: text } };
+            }
+            return { status: response.status, body: parsed };
+        }
+
+        async function generateToken() {
+            const code = loginCodeInput.value.trim();
+            showError('loginError', '');
+            if (!code) {
+                showError('loginError', '请先填写登录 code');
+                return;
+            }
+            const { status, body } = await request('POST', '/api/user/wx-login', { code: code, nickname: '本地调试' });
+            const token = body && body.data ? body.data.token : null;
+            if (!token) {
+                showError('loginError', '未取到 token（HTTP ' + status + '）：' + (body && body.message ? body.message : '检查服务地址与 mock 开关'));
+                showResult('userInfoResult', body, false);
+                return;
+            }
+            document.getElementById('token').value = token;
+            showResult('userInfoResult', body, status === 200);
+        }
+
+        async function getUserInfo() {
+            if (!getToken()) {
+                showError('loginError', '请先获取 token');
+                return;
+            }
+            const { status, body } = await request('GET', '/api/user/info');
+            showResult('userInfoResult', body, status === 200);
+        }
+
+        async function queryDiet() {
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const err = validateRange(startDate, endDate);
+            showError('queryError', err);
+            if (err) return;
+            const { status, body } = await request('GET', '/api/diet/query?startDate=' + encodeURIComponent(startDate) + '&endDate=' + encodeURIComponent(endDate));
+            showResult('dietQueryResult', body, status === 200);
+        }
+
+        /**
+         * 前端只做最基本的入参检查，真正的约束以后端校验为准
+         */
+        function validateRange(startDate, endDate) {
+            if (!getToken()) return '请先获取 token';
+            if (!startDate || !endDate) return '开始日期和结束日期都不能为空';
+            if (startDate > endDate) return '开始日期不能晚于结束日期';
+            return '';
+        }
+
+        async function createDiet() {
+            const recordDate = document.getElementById('recordDate').value;
+            const foodName = document.getElementById('foodName').value.trim();
+            const caloriesRaw = document.getElementById('calories').value;
+            const err = validateCreate(recordDate, foodName, caloriesRaw);
+            showError('createError', err);
+            if (err) return;
+
+            const { status, body } = await request('POST', '/api/diet', {
+                recordDate: recordDate,
+                mealType: parseInt(document.getElementById('mealType').value, 10),
+                foodName: foodName,
+                calories: Number(caloriesRaw),
+                remark: document.getElementById('remark').value
+            });
+            showResult('createDietResult', body, status === 200);
+        }
+
+        /**
+         * 创建记录的入参检查
+         *
+         * 热量判断为何写成这样：
+         * - Number('abc') 是 NaN，而 NaN < 0 为 false，只判 <0 会放过非法输入，
+         *   到后端变成 null/NaN 的困惑错误，因此必须显式排除非有限数字
+         * - 上限不在这里写死，以后端 @Min(0) 与数据库字段为准
+         */
+        function validateCreate(recordDate, foodName, caloriesRaw) {
+            if (!getToken()) return '请先获取 token';
+            if (!recordDate) return '记录日期不能为空';
+            if (!foodName) return '食物名称不能为空';
+            if (foodName.length > 200) return '食物名称最长 200 个字符（与后端校验一致）';
+            const calories = Number(caloriesRaw);
+            if (caloriesRaw === '' || !Number.isFinite(calories) || calories < 0) {
+                return '热量必须是不小于 0 的数字';
+            }
+            return '';
+        }
+
+        // 日期默认值取当天：写死历史日期会让"查询有数据"看起来像接口坏了
+        document.getElementById('startDate').value = today();
+        document.getElementById('endDate').value = today();
+        document.getElementById('recordDate').value = today();
+    </script>
+</body>
+</html>
