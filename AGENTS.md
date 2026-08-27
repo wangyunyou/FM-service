@@ -32,6 +32,11 @@ mvn test
 ```
 
 - 默认端口 `8080`
+- **开发库账号**：`application-dev.yml` 里是 `username: ${DB_USER:${user.name}}`。
+  Homebrew 装 PostgreSQL 时会自动建一个**与操作系统用户名同名**的免密超级用户，
+  默认取 `${user.name}` 所以 clone 下来不用改配置；
+  用别的角色时加前缀：`DB_USER=postgres mvn test`。
+  （曾经这里写死了某台机器的用户名，导致其他人 `mvn test` 直接 `FATAL: role does not exist`）
 - 开发环境接口文档：`http://localhost:8080/swagger-ui.html`（生产默认关闭）
 - 开发环境看数据：`psql -d fmdb -c 'SELECT * FROM diet_records'`
 - 开发环境没有真实微信密钥：dev profile 已开 `wx.miniapp.mock-enabled`，任意 `code` 可换 token

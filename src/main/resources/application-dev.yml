@@ -6,8 +6,11 @@ spring:
 
   datasource:
     url: jdbc:postgresql://localhost:5432/fmdb
-    username: wangyunyou
-    password:
+    # 本地 Homebrew PostgreSQL 的超级用户默认就是操作系统用户名，
+    # 所以默认取 ${user.name}（而不是写死某台机器的名字），换机器开箱即用。
+    # 需要覆盖时：DB_USER=postgres mvn test
+    username: ${DB_USER:${user.name}}
+    password: ${DB_PASSWORD:}
     driver-class-name: org.postgresql.Driver
 
   jpa:
