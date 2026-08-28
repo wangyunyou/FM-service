@@ -200,7 +200,7 @@ public class DietRecordServiceImpl implements DietRecordService {
         for (Object[] row : mealStats) {
             Integer mealType = (Integer) row[0];
             Integer calories = ((Number) row[1]).intValue();
-            caloriesByMeal.put(DietRecordResponse.getMealTypeName(mealType), calories);
+            caloriesByMeal.merge(DietRecordResponse.getMealTypeName(mealType), calories, Integer::sum);
         }
 
         // 7. 计算日均热量

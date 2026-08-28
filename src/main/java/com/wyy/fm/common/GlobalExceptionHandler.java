@@ -128,7 +128,7 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Result<Void> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
         log.error("数据约束冲突", ex);
-        return Result.fail(ErrorCode.BAD_REQUEST.getCode(), "数据己存在或己被引用，请刷新后重试");
+        return Result.fail(ErrorCode.BAD_REQUEST.getCode(), "数据已存在或已被引用，请刷新后重试");
     }
 
     /**

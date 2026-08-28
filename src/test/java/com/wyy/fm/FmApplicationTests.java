@@ -674,6 +674,40 @@ class FmApplicationTests {
     }
 
     /**
+     * 回归：按餐次统计时，若有多个不同未知餐次代码映射为「未知」，热量必须累加而不是相互覆盖
+     */
+    @Test
+    void testUnknownMealTypesAreSummedNotOverwritten() {
+        Long userId = newTestUser("test-openid-meal-merge").getId();
+        LocalDate today = LocalDate.now();
+
+        // 插入两条异常餐次代码的数据（直接落库绕过 DTO 校验）
+        DietRecord r1 = new DietRecord();
+        r1.setUserId(userId);
+        r1.setRecordDate(today);
+        r1.setMealType(0); // 未知餐次 0
+        r1.setFoodName("食物A");
+        r1.setCalories(100);
+        dietRecordRepository.save(r1);
+
+        DietRecord r2 = new DietRecord();
+        r2.setUserId(userId);
+        r2.setRecordDate(today);
+        r2.setMealType(99); // 未知餐次 99
+        r2.setFoodName("食物B");
+        r2.setCalories(200);
+        dietRecordRepository.save(r2);
+
+        QueryDietRecordRequest queryRequest = new QueryDietRecordRequest();
+        queryRequest.setStartDate(today);
+        queryRequest.setEndDate(today);
+
+        DietStatisticsResponse stats = dietRecordService.queryWithStats(userId, queryRequest);
+        assertEquals(300, stats.getTotalCalories());
+        assertEquals(300, stats.getCaloriesByMeal().get("未知"), "多个映射为「未知」的餐次热量应累加为 300，而不是被覆盖");
+    }
+
+    /**
      * 走 mock 登录拿 token（dev profile 下 wx.miniapp.mock-enabled=true，任意 code 可换）
      *
      * 为什么需要它：mock 的 openid 是 code 的 SHA-256 前 32 位，Java 侧算不出来，

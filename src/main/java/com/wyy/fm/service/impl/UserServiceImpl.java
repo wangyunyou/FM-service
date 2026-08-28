@@ -41,7 +41,10 @@ public class UserServiceImpl implements UserService {
     /**
      * 微信登录实现
      * 
-     * @Transactional：事务注解，保证方法内的数据库操作要么全成功，要么全回滚
+     * 注意：本方法故意不加 @Transactional：
+     * 并发首登时 saveAndFlush 发生 openid 唯一约束冲突，
+     * 若在外部事务内执行，PostgreSQL 会将整个事务标记为 ABORTED 导致 catch 块内的重查失败。
+     * 不加方法级事务时，saveAndFlush 自带独立事务回滚，catch 块可在新事务中顺利查出已存在的用户。
      * 
      * 流程：
      * 1. 用 code 换 openid
@@ -51,7 +54,6 @@ public class UserServiceImpl implements UserService {
      * 5. 生成 JWT token
      */
     @Override
-    @Transactional
     public LoginResponse wxLogin(WxLoginRequest request) {
         // 1. 调用微信接口，用 code 换取 openid
         String openid = wxApiService.code2Session(request.getCode());
