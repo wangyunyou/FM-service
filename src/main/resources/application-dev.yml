@@ -17,17 +17,10 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: true
-    # 让 data.sql 在 Hibernate 建完表之后执行，否则新库首次启动会“表不存在”
-    defer-datasource-initialization: true
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
-
-  # 开发环境自动执行 data.sql 种子数据（脚本已写成幂等，重启不会插重复数据）
-  sql:
-    init:
-      mode: always
 
 # 开发环境放开本地来源，方便 H5 / 浏览器调试（test-api.html 以 file:// 打开时 Origin 为 null）
 # 生产默认不配，见 application.yml

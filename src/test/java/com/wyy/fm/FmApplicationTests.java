@@ -31,13 +31,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * - @SpringBootTest：启动完整的 Spring 容器（真实环境）
  * - @AutoConfigureMockMvc：自动配置 MockMvc（模拟 HTTP 请求）
  * - @ActiveProfiles("dev")：使用 dev 配置，即本地 PostgreSQL（jdbc:postgresql://localhost:5432/fmdb）
- *   注意：跑测试前必须先启动本地 PG；data.sql 会先写入种子数据（测试用户 + 当天三餐）
+ *   注意：跑测试前必须先启动本地 PG
  * - @Transactional：每个测试方法执行完自动回滚，测试自己造的数据不会落库
- *   （data.sql 的插入在容器启动时已提交，不受回滚影响）
  *
  * 测试内容：
  * - JWT 工具类测试
- * - 饮食记录统计测试（用独立用户，不依赖种子数据）
+ * - 饮食记录统计测试（用独立用户隔离数据）
  * - HTTP 接口测试（含鉴权与参数校验回归）
  */
 @SpringBootTest
@@ -92,7 +91,7 @@ class FmApplicationTests {
      * 测试空数据查询
      *
      * 为什么现造一个用户而不是写死 userId：
-     * - dev 库里有 data.sql 的种子数据，硬编码 ID 可能撞上真实记录导致断言飘
+     * - 硬编码 ID 可能撞上真实记录导致断言飘，通过独立 openid 隔绝环境影响
      */
     @Test
     void testDietRecordQueriesWhenEmpty() {
@@ -119,7 +118,7 @@ class FmApplicationTests {
     /**
      * 测试有数据时的查询
      *
-     * 用独立用户隔离数据，避免与 data.sql 种子记录求和互干扰
+     * 用独立用户隔离数据，避免与其他测试记录求和互干扰
      */
     @Test
     void testDietRecordQueriesWithData() {

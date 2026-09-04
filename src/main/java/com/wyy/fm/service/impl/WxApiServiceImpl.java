@@ -1,5 +1,7 @@
 package com.wyy.fm.service.impl;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wyy.fm.common.BusinessException;
 import com.wyy.fm.common.ErrorCode;
 import com.wyy.fm.service.WxApiService;
@@ -49,6 +51,9 @@ public class WxApiServiceImpl implements WxApiService {
 
     // HTTP 客户端（用于调用微信接口）
     private final RestTemplate restTemplate;
+
+    // JSON 解析器（微信网关返回 text/plain 时用其反序列化）
+    private final ObjectMapper objectMapper;
 
     /**
      * 是否启用本地 mock 登录（默认 false）
@@ -125,12 +130,14 @@ public class WxApiServiceImpl implements WxApiService {
         );
 
         try {
-            // 2. 调用微信接口
-            @SuppressWarnings("unchecked")
-            Map<String, Object> result = restTemplate.getForObject(
-                    CODE2SESSION_URL, Map.class, params);
+            // 2. 调用微信接口（微信经常返回 text/plain Content-Type，用 String 接收最稳健）
+            String responseStr = restTemplate.getForObject(CODE2SESSION_URL, String.class, params);
+            if (responseStr == null || responseStr.isBlank()) {
+                throw new BusinessException(ErrorCode.WX_LOGIN_FAILED, "微信服务无响应");
+            }
 
-            // 3. 校验返回结果
+            // 3. 解析 JSON 响应
+            Map<String, Object> result = objectMapper.readValue(responseStr, new TypeReference<Map<String, Object>>() {});
             if (result == null) {
                 throw new BusinessException(ErrorCode.WX_LOGIN_FAILED);
             }

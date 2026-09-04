@@ -29,7 +29,7 @@ cd FM-service
 # 首次准备数据库（库名需与 application-dev.yml 一致）
 createdb fmdb
 
-# 启动（dev profile：本地 PG + 自动建表 + data.sql 种子数据）
+# 启动（dev profile：本地 PG + 自动建表）
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
@@ -237,10 +237,6 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update                          # 自动建表/改表
-    defer-datasource-initialization: true       # data.sql 在建表后执行
-  sql:
-    init:
-      mode: always                              # 执行 data.sql 种子数据（幂等）
 
 app:
   cors:
@@ -254,11 +250,6 @@ wx:
   miniapp:
     mock-enabled: true                          # 无需真实微信密钥即可登录
 ```
-
-> 上面两个脚本相关配置是**成套的强制依赖**：缺 `mode: always` 则在 PostgreSQL 上根本不执行 data.sql
-> （默认值 embedded 仅对内存库生效）；缺 `defer-datasource-initialization: true` 则脚本跑在建表前，
-> 空库首次启动报“表不存在”。另外 data.sql 必须写成幂等（`WHERE NOT EXISTS`）：dev 用 `ddl-auto: update`
-> 会保留数据，脚本每次启动都重跑。生产 profile 是 `sql.init.mode: never` + `ddl-auto: validate`，不碰这份脚本。
 
 ## 环境变量一览
 

@@ -17,7 +17,7 @@
 ## 启动与构建
 
 ```bash
-# 开发环境（本地 PostgreSQL，自动建表 + data.sql 种子数据）
+# 开发环境（本地 PostgreSQL，自动建表）
 brew services start postgresql@16   # 首次需启动 PG；库不存在时 createdb fmdb
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
@@ -126,7 +126,6 @@ throw new IllegalArgumentException("参数错误");
   - 逻辑外键 = **没有数据库级联删除**：删用户不会带走 `diet_records`，需要业务层自己处理。
     目前没有删用户接口所以踩不到，真要加记得先删子记录（否则留下无主记录）
 - 生产环境 `ddl-auto: validate`（不会自动建表），开发环境 `ddl-auto: update`
-- 种子数据写 `src/main/resources/data.sql`，必须写成幂等（`WHERE NOT EXISTS`），用业务唯一键定位而不是硬编码自增 ID；只在 dev profile 执行（`spring.sql.init.mode`）
 
 ### 5. Service 层
 

@@ -27,8 +27,7 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
 
-  # 种子脚本开关（默认值 embedded 对 PostgreSQL 等于不执行，这里显式写死避免误执行）
-  # data.sql 仅用于本地开发造数据，在 application-dev.yml 里打开
+  # 数据库初始化脚本开关：禁用自动执行 sql 初始化脚本
   sql:
     init:
       mode: never
