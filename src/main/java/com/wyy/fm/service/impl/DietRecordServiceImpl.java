@@ -187,20 +187,13 @@ public class DietRecordServiceImpl implements DietRecordService {
                 .findByUserIdAndRecordDateBetweenOrderByRecordDateAscMealTypeAsc(
                         userId, start, end);
 
-        // 5. 统计总热量
-        Integer totalCalories = dietRecordRepository
-                .sumCaloriesByUserIdAndDateRange(userId, start, end);
-
-        // 6. 按餐次统计
-        List<Object[]> mealStats = dietRecordRepository
-                .sumCaloriesByMealType(userId, start, end);
-
-        // 将查询结果转换为 Map<餐次名称, 热量>
+        // 5. 统计总热量与按餐次统计（直接基于已查出的 records 在内存中聚合，避免向远程数据库发起多余的串行网络往返）
+        int totalCalories = 0;
         Map<String, Integer> caloriesByMeal = new HashMap<>();
-        for (Object[] row : mealStats) {
-            Integer mealType = (Integer) row[0];
-            Integer calories = ((Number) row[1]).intValue();
-            caloriesByMeal.merge(DietRecordResponse.getMealTypeName(mealType), calories, Integer::sum);
+        for (DietRecord record : records) {
+            int cal = record.getCalories() != null ? record.getCalories() : 0;
+            totalCalories += cal;
+            caloriesByMeal.merge(DietRecordResponse.getMealTypeName(record.getMealType()), cal, Integer::sum);
         }
 
         // 7. 计算日均热量
